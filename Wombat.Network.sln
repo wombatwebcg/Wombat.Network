@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.34301.259
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wombat.Network", "Wombat.Network\Wombat.Network.csproj", "{3EECCFD9-B406-40EB-80E2-E63E361B1C1E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3EECCFD9-B406-40EB-80E2-E63E361B1C1E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3EECCFD9-B406-40EB-80E2-E63E361B1C1E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3EECCFD9-B406-40EB-80E2-E63E361B1C1E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3EECCFD9-B406-40EB-80E2-E63E361B1C1E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {50E02E14-D5D0-4ECF-8640-423581EC92C4}
+	EndGlobalSection
+EndGlobal
