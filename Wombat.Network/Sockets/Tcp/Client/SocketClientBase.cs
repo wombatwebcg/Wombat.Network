@@ -175,7 +175,73 @@ namespace Wombat.Network.Sockets
                 throw;
             }
         }
-        public void Connect(IPEndPoint remoteEndPoint) => ConnectAsync(remoteEndPoint).Wait();
+        public void Connect(IPEndPoint remoteEndPoint)
+        {
+            if (remoteEndPoint == null)
+                throw new ArgumentNullException("remoteEP");
+            _remoteEndPoint = remoteEndPoint;
+            int origin = Interlocked.Exchange(ref _state, _connecting);
+            if (!(origin == _none || origin == _closed))
+            {
+                Close(false); // connecting with wrong state
+                throw new InvalidOperationException("This tcp socket client is in invalid state when connecting.");
+            }
+
+            Clean(); // force to clean
+
+            try
+            {
+
+                if (_isUdp)
+                {
+                    _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+
+                }
+                else
+                {
+                    _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
+                }
+                if (_localEndPoint != null) _socket.Bind(_localEndPoint);
+                SetSocketOptions();
+
+                var awaiter = _socket.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
+                if (!awaiter.Wait(SocketConfiguration.ConnectTimeout))
+                {
+                    Close(false); // connect timeout
+                    throw new TimeoutException(string.Format(
+                        "Connect to [{0}] timeout [{1}].", _remoteEndPoint, SocketConfiguration.ConnectTimeout));
+                }
+
+                var negotiator = NegotiateStream(new NetworkStream(_socket, true));
+                if (!negotiator.Wait(SocketConfiguration.ConnectTimeout))
+                {
+                    Close(false); // ssl negotiation timeout
+                    throw new TimeoutException(string.Format(
+                        "Negotiate SSL/TSL with remote [{0}] timeout [{1}].", _remoteEndPoint, SocketConfiguration.ConnectTimeout));
+                }
+                _stream = negotiator.Result;
+
+                if (_receiveBuffer == default(ArraySegment<byte>))
+                    _receiveBuffer = SocketConfiguration.BufferManager.BorrowBuffer();
+                _receiveBufferOffset = 0;
+
+                if (Interlocked.CompareExchange(ref _state, _connected, _connecting) != _connecting)
+                {
+                    Close(false); // connected with wrong state
+                    throw new InvalidOperationException("This tcp socket client is in invalid state when connected.");
+                }
+
+            }
+            catch (Exception ex) // catch exceptions then log then re-throw
+            {
+
+                _logger?.LogError(ex.Message, ex);
+                Close(false); // handle tcp connection error occurred
+                throw;
+            }
+
+        }
 
 
         private void SetSocketOptions()
