@@ -38,10 +38,12 @@ namespace Wombat.Network.WebSockets
             KeepAliveTimeout = TimeSpan.FromSeconds(15);
             ReasonableFragmentSize = 4096;
 
-            EnabledExtensions = new Dictionary<string, IWebSocketExtensionNegotiator>()
-            {
-                { PerMessageCompressionExtension.RegisteredToken, new PerMessageCompressionExtensionNegotiator() },
-            };
+            //EnabledExtensions = new Dictionary<string, IWebSocketExtensionNegotiator>()
+            //{
+            //    { PerMessageCompressionExtension.RegisteredToken, new PerMessageCompressionExtensionNegotiator() },
+            //};
+
+            EnabledExtensions = new Dictionary<string, IWebSocketExtensionNegotiator>();
             EnabledSubProtocols = new Dictionary<string, IWebSocketSubProtocolNegotiator>();
         }
 
@@ -51,6 +53,8 @@ namespace Wombat.Network.WebSockets
         public TimeSpan ReceiveTimeout { get; set; }
         public TimeSpan SendTimeout { get; set; }
         public bool NoDelay { get; set; }
+        //public bool NoDelay { get; set; }
+
         public LingerOption LingerState { get; set; }
 
         public int PendingConnectionBacklog { get; set; }

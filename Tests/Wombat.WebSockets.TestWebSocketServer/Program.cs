@@ -5,6 +5,8 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using System.Net;
+using Wombat.Network.WebSockets.Extensions;
+using System.Collections.Generic;
 
 namespace Wombat.WebSockets.TestWebSocketServer
 {
@@ -32,10 +34,11 @@ namespace Wombat.WebSockets.TestWebSocketServer
                 catalog.RegisterModule(new TestWebSocketModule());
 
                 var config = new WebSocketServerConfiguration();
+                config.EnabledExtensions.Add(PerMessageCompressionExtension.RegisteredToken, new PerMessageCompressionExtensionNegotiator());
                 //config.SslEnabled = true;
                 //config.SslServerCertificate = new System.Security.Cryptography.X509Certificates.X509Certificate2(@"D:\\Cowboy.pfx", "Cowboy");
                 //config.SslPolicyErrorsBypassed = true;
-                IPEndPoint remoteEP = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 22222);
+                IPEndPoint remoteEP = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 5001);
 
                 _server = new WebSocketServer(remoteEP, catalog, config);
                 _server.UsgLogger(logger);

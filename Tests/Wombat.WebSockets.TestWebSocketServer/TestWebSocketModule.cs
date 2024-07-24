@@ -8,7 +8,7 @@ namespace Wombat.WebSockets.TestWebSocketServer
     public class TestWebSocketModule : AsyncWebSocketServerModule
     {
         public TestWebSocketModule()
-            : base(@"/test")
+            : base(@"/ws1")
         {
         }
 

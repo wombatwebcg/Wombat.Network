@@ -29,16 +29,10 @@ namespace Wombat.Network.WebSockets
             ReasonableFragmentSize = 4096;
 
 
-            EnabledExtensions = new Dictionary<string, IWebSocketExtensionNegotiator>()
-            {
-                { PerMessageCompressionExtension.RegisteredToken, new PerMessageCompressionExtensionNegotiator() },
-            };
+            EnabledExtensions = new Dictionary<string, IWebSocketExtensionNegotiator>();
             EnabledSubProtocols = new Dictionary<string, IWebSocketSubProtocolNegotiator>();
 
-            OfferedExtensions = new List<WebSocketExtensionOfferDescription>()
-            {
-                new WebSocketExtensionOfferDescription(PerMessageCompressionExtension.RegisteredToken),
-            };
+            OfferedExtensions = new List<WebSocketExtensionOfferDescription>();
             RequestedSubProtocols = new List<WebSocketSubProtocolRequestDescription>();
 
         }

@@ -61,9 +61,21 @@ namespace Wombat.Network.WebSockets.Extensions
                         }
                     }
                     while (readCount > 0);
+                    var returnBuffer = memory.ToArray();
+                    if (returnBuffer.Length == 0)
+                    {
+                        return raw;
+                    }
+                    else
+                    {
+                        return memory.ToArray();
 
-                    return memory.ToArray();
+                    }
                 }
+            }
+            catch (InvalidDataException)
+            {
+                return raw;
             }
             finally
             {

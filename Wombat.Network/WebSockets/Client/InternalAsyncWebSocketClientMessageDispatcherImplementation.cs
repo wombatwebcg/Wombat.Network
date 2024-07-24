@@ -59,8 +59,15 @@ namespace Wombat.Network.WebSockets
 
         public async Task OnServerTextReceived(WebSocketClient client, string text)
         {
-            if (_onServerTextReceived != null)
-                await _onServerTextReceived(client, text);
+            try
+            {
+                if (_onServerTextReceived != null)
+                    await _onServerTextReceived(client, text);
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine(text);
+            }
         }
 
         public async Task OnServerBinaryReceived(WebSocketClient client, byte[] data, int offset, int count)

@@ -6,6 +6,10 @@ using Wombat.Network.WebSockets;
 using Wombat.Network;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
+using System.Security.Cryptography;
+using System.Collections.Generic;
+using Wombat.Network.WebSockets.Extensions;
+using Wombat.Network.WebSockets.SubProtocols;
 
 namespace Wombat.WebSockets.TestWebSocketClient
 {
@@ -15,7 +19,7 @@ namespace Wombat.WebSockets.TestWebSocketClient
 
         static void Main(string[] args)
         {
-            using var loggerFactory = LoggerFactory.Create(builder =>
+           var loggerFactory = LoggerFactory.Create(builder =>
             {
                 builder
                     .AddFilter("Microsoft", LogLevel.Warning)
@@ -27,19 +31,35 @@ namespace Wombat.WebSockets.TestWebSocketClient
             ILogger logger = loggerFactory.CreateLogger<Program>();
             logger.LogInformation("Example log message");
 
+
+
+
+            // 配置公共参数
+            string accessKey = "6nvwlwkzz7cigvs6uy3x";
+            string secretKey = "926mdw36lzyb7t3suxcs";
+            long timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+            string sign = GenerateSign(accessKey, timestamp, secretKey);
+
             Task.Run(async () =>
             {
                 try
                 {
                     var config = new WebSocketClientConfiguration();
 
+                    //增加压缩传输功能
+                    config.EnabledExtensions.Add(PerMessageCompressionExtension.RegisteredToken, new PerMessageCompressionExtensionNegotiator());
+                    //启用压缩传输协议
+                    config.OfferedExtensions.Add(new WebSocketExtensionOfferDescription(PerMessageCompressionExtension.RegisteredToken));
                     //config.SslTargetHost = "Cowboy";
                     //config.SslClientCertificates.Add(new System.Security.Cryptography.X509Certificates.X509Certificate2(@"D:\\Cowboy.cer"));
                     //config.SslPolicyErrorsBypassed = true;
 
                     //var uri = new Uri("ws://echo.websocket.org/");   // connect to websocket.org website
                     //var uri = new Uri("wss://127.0.0.1:22222/test"); // use wss with ssl
-                    var uri = new Uri("ws://127.0.0.1:22222/test");    // connect to localhost
+                    var uri = new Uri("ws://127.0.0.1:5001/ws1");    // connect to localhost
+
+                    //var uri = new Uri("ws://192.168.1.88:81/websocket/message"+$"?access_key={accessKey}&sign={sign}&timestamp={timestamp}");    // connect to localhost
+
                     _client = new WebSocketClient(uri,
                         OnServerTextReceived,
                         OnServerBinaryReceived,
@@ -63,14 +83,14 @@ namespace Wombat.WebSockets.TestWebSocketClient
                                 if (text == "many")
                                 {
                                     text = "";
-                                    for (int i = 0; i < 10000; i++)
+                                    for (int i = 0; i < 100; i++)
                                     {
-                                        text += $"{i},";
+                                        text += $"{i}a,";
                                     }
                                     Stopwatch watch = Stopwatch.StartNew();
-                                    for (int i = 0; i <= 1000; i++)
+                                    for (int i = 0; i <= 100; i++)
                                     {
-                                         _client.SendBinary(Encoding.UTF8.GetBytes(text));
+                                        _client.SendBinary(Encoding.UTF8.GetBytes(text));
                                         Console.WriteLine("Client [{0}] send binary -> Sequence[{1}] -> TextLength[{2}].",
                                             _client.LocalEndPoint, text, text.Length);
                                     }
@@ -114,7 +134,7 @@ namespace Wombat.WebSockets.TestWebSocketClient
                         }
                         catch (Exception ex)
                         {
-                           logger.LogError(ex.Message, ex);
+                            logger.LogError(ex.Message, ex);
                         }
                     }
 
@@ -123,6 +143,7 @@ namespace Wombat.WebSockets.TestWebSocketClient
                 }
                 catch (Exception ex)
                 {
+                    logger.LogError(ex.StackTrace);
                     logger.LogError(ex.Message, ex);
                 }
             }).Wait();
@@ -130,17 +151,33 @@ namespace Wombat.WebSockets.TestWebSocketClient
             Console.ReadKey();
         }
 
+        static string GenerateSign(string accessKey, long timestamp, string secretKey)
+        {
+            using (MD5 md5 = MD5.Create())
+            {
+                string input = accessKey + timestamp + secretKey;
+                byte[] inputBytes = Encoding.UTF8.GetBytes(input);
+                byte[] hashBytes = md5.ComputeHash(inputBytes);
+                StringBuilder sb = new StringBuilder();
+                foreach (byte b in hashBytes)
+                {
+                    sb.Append(b.ToString("x2"));
+                }
+                return sb.ToString();
+            }
+        }
+
         private static async Task OnServerConnected(WebSocketClient client)
         {
-            Console.WriteLine(string.Format("WebSocket server [{0}] has connected.", client.RemoteEndPoint));
+            //Console.WriteLine(string.Format("WebSocket server [{0}] has connected.", client.RemoteEndPoint));
             await Task.CompletedTask;
         }
 
         private static async Task OnServerTextReceived(WebSocketClient client, string text)
         {
-            Console.Write(string.Format("WebSocket server [{0}] received Text --> ", client.RemoteEndPoint));
-            Console.WriteLine(string.Format("{0}", text));
-
+            //Console.Write(string.Format("WebSocket server [{0}] received Text --> ", client.RemoteEndPoint));
+            //Console.WriteLine(string.Format("{0}", text));
+            Console.WriteLine(text);
             await Task.CompletedTask;
         }
 
