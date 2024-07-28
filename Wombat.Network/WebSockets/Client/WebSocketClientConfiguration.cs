@@ -17,8 +17,8 @@ namespace Wombat.Network.WebSockets
             BufferManager = new SegmentBufferManager(100, 8192, 1, true);
             ReceiveBufferSize = 8192;
             SendBufferSize = 8192;
-            ReceiveTimeout = TimeSpan.Zero;
-            SendTimeout = TimeSpan.Zero;
+            ReceiveTimeout = TimeSpan.FromSeconds(2);             // Receive a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
+            SendTimeout = TimeSpan.FromSeconds(2);                // Send a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
             NoDelay = true;
             LingerState = new LingerOption(false, 0); // The socket will linger for x seconds after Socket.Close is called.
 

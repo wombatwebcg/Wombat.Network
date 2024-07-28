@@ -22,8 +22,8 @@ namespace Wombat.Network.Sockets
 
             ReceiveBufferSize = 8192;                   // Specifies the total per-socket buffer space reserved for receives. This is unrelated to the maximum message size or the size of a TCP window.
             SendBufferSize = 8192;                      // Specifies the total per-socket buffer space reserved for sends. This is unrelated to the maximum message size or the size of a TCP window.
-            ReceiveTimeout = TimeSpan.Zero;             // Receive a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
-            SendTimeout = TimeSpan.Zero;                // Send a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
+            ReceiveTimeout = TimeSpan.FromSeconds(5);             // Receive a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
+            SendTimeout = TimeSpan.FromSeconds(5);                // Send a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
             NoDelay = true;                             // Disables the Nagle algorithm for send coalescing.
             LingerState = new LingerOption(false, 0);   // The socket will linger for x seconds after Socket.Close is called.
             KeepAlive = false;                          // Use keep-alives.

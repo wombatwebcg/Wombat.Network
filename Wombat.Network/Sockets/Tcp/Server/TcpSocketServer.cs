@@ -20,7 +20,7 @@ namespace Wombat.Network.Sockets
         private static IFrameBuilder _frameBuilder;
         private readonly TcpSocketServerConfiguration _configuration;
 
-        private int _state;
+        private volatile int _state;
         private const int _none = 0;
         private const int _listening = 1;
         private const int _disposed = 5;

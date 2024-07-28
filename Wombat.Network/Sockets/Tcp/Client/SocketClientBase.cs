@@ -87,11 +87,6 @@ namespace Wombat.Network.Sockets
 
         public ClientSecurityOptions SecurityOptions => _securityOptions;
 
-        public TimeSpan ConnectTimeout => _configuration.ConnectTimeout;
-
-        public TimeSpan KeepAliveInterval => _configuration.KeepAliveInterval;
-
-
         #endregion
 
         public virtual void UsgLogger(ILogger log)
@@ -204,7 +199,6 @@ namespace Wombat.Network.Sockets
                 }
                 if (_localEndPoint != null) _socket.Bind(_localEndPoint);
                 SetSocketOptions();
-
                 var awaiter = _socket.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
                 if (!awaiter.Wait(SocketConfiguration.ConnectTimeout))
                 {

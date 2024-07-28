@@ -22,14 +22,13 @@ namespace Wombat.Network.Sockets
 
             ReceiveBufferSize = 8192;
             SendBufferSize = 8192;
-            ReceiveTimeout = TimeSpan.Zero;
-            SendTimeout = TimeSpan.Zero;
+            ReceiveTimeout = TimeSpan.FromSeconds(5);             // Receive a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
+            SendTimeout = TimeSpan.FromSeconds(5);                // Send a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
             NoDelay = true;
             LingerState = new LingerOption(false, 0);
             KeepAlive = false;
             KeepAliveInterval = TimeSpan.FromSeconds(5);
             ReuseAddress = false;
-
             ConnectTimeout = TimeSpan.FromSeconds(15);
         }
 

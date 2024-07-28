@@ -24,8 +24,7 @@ namespace Wombat.Network.Sockets
         IPEndPoint RemoteEndPoint { get; }
         TcpSocketClientConfiguration SocketConfiguration { get; }
         ClientSecurityOptions SecurityOptions { get; }
-        TimeSpan ConnectTimeout { get; }
-        TimeSpan KeepAliveInterval { get; }
+
 
         #endregion
 
