@@ -36,4 +36,11 @@
 		<PackageReference Include="System.Runtime.Loader" Version="4.3.0" />
 		<PackageReference Include="System.Threading.Channels" Version="7.0.0" />
 	</ItemGroup>
+
+
+
+
+	<ItemGroup>
+	  <Folder Include="Common\" />
+	</ItemGroup>
 </Project>
