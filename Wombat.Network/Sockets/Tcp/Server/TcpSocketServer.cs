@@ -135,6 +135,7 @@ namespace Wombat.Network.Sockets
             catch (Exception ex) when (!ShouldThrow(ex)) { }
         }
 
+
         public void Shutdown()
         {
             if (Interlocked.Exchange(ref _state, _disposed) == _disposed)

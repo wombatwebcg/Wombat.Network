@@ -58,8 +58,8 @@ namespace Wombat.Network.Sockets
                 throw new ArgumentNullException("dispatcher");
             if (server == null)
                 throw new ArgumentNullException("server");
-            if (logger == null)
-                throw new ArgumentNullException("server");
+            //if (logger == null)
+            //    throw new ArgumentNullException("server");
 
             _logger = logger;
             _tcpClient = tcpClient;
