@@ -12,7 +12,7 @@ namespace Wombat.Network.Sockets
     public sealed class TcpSocketServerConfiguration : SocketConfiguration
     {
         public TcpSocketServerConfiguration()
-    : this(new SegmentBufferManager(1024, 32768, 1, true))
+    : this(new SegmentBufferManager(8, 1024, 1, true))
         {
         }
 
@@ -20,8 +20,8 @@ namespace Wombat.Network.Sockets
         {
             BufferManager = bufferManager;
 
-            ReceiveBufferSize = 32768;
-            SendBufferSize = 32768;
+            ReceiveBufferSize = 4096;
+            SendBufferSize = 4096;
             ReceiveTimeout = TimeSpan.FromSeconds(5);             // Receive a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
             SendTimeout = TimeSpan.FromSeconds(5);                // Send a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
             NoDelay = true;
