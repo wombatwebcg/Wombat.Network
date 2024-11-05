@@ -17,7 +17,7 @@ namespace Wombat.Socket.TestTcpSocketClient
         public async Task OnServerDataReceived(TcpSocketClient client, byte[] data, int offset, int count)
         {
             var text = Encoding.UTF8.GetString(data, offset, count);
-            Console.Write(string.Format("Server : {0} --> {1}:", client.RemoteEndPoint, client.LocalEndPoint));
+            Console.Write(string.Format("Reveice:Server : {0} --> {1}:", client.RemoteEndPoint, client.LocalEndPoint));
             if (count < 1024 * 1024 * 1)
             {
                 Console.WriteLine(text);

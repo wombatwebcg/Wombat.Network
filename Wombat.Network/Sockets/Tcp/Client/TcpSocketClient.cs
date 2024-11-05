@@ -96,6 +96,35 @@ namespace Wombat.Network.Sockets
 
         }
 
+        public override void Connect(IPEndPoint remoteEndPoint)
+        {
+            bool isErrorOccurredInUserSide = false;
+            try
+            {
+                base.Connect(remoteEndPoint);
+                _dispatcher.OnServerConnected(this);
+            }
+            catch (Exception ex) // catch all exceptions from out-side
+            {
+                isErrorOccurredInUserSide = true;
+                _ = HandleUserSideError(ex);
+            }
+
+            if (!isErrorOccurredInUserSide)
+            {
+                Task.Factory.StartNew(async () =>
+                {
+                    await Process();
+                },
+                TaskCreationOptions.None).Forget();
+            }
+            else
+            {
+                Close(true); // user side handle tcp connection error occurred
+            }
+
+
+        }
 
         private async Task Process()
         {
@@ -213,6 +242,32 @@ namespace Wombat.Network.Sockets
         }
 
 
+        private  void Close(bool shallNotifyUserSide)
+        {
+
+            if (Interlocked.Exchange(ref _state, _closed) == _closed)
+            {
+                return;
+            }
+            Shutdown();
+            if (shallNotifyUserSide)
+            {
+                _logger?.LogDebug($"Disconnected from server [{this.RemoteEndPoint}] " +
+                    $"with dispatcher [{_dispatcher.GetType().Name}] " +
+                    $"on [{DateTime.UtcNow.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff")}].");
+
+                try
+                {
+                    _dispatcher.OnServerDisconnected(this);
+                }
+                catch (Exception ex) // catch all exceptions from out-side
+                {
+                    _= HandleUserSideError(ex);
+                }
+            }
+
+            Clean();
+        }
 
 
 

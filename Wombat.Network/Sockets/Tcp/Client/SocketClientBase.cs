@@ -107,8 +107,9 @@ namespace Wombat.Network.Sockets
         public virtual async Task ConnectAsync(IPEndPoint remoteEndPoint)
         {
             if (remoteEndPoint == null)
-                throw new ArgumentNullException("remoteEP");
+                throw new ArgumentNullException(nameof(remoteEndPoint));
             _remoteEndPoint = remoteEndPoint;
+
             int origin = Interlocked.Exchange(ref _state, _connecting);
             if (!(origin == _none || origin == _closed))
             {
@@ -120,36 +121,33 @@ namespace Wombat.Network.Sockets
 
             try
             {
-
-                if(_isUdp)
+                if (_isUdp)
                 {
                     _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-
                 }
                 else
                 {
                     _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
                 }
+
                 if (_localEndPoint != null) _socket.Bind(_localEndPoint);
                 SetSocketOptions();
 
-                var awaiter = _socket.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
-                if (!awaiter.Wait(SocketConfiguration.ConnectTimeout))
+                // Connect with timeout
+                var connectionTask = _socket.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
+                if (await Task.WhenAny(connectionTask, Task.Delay(SocketConfiguration.ConnectTimeout)) != connectionTask)
                 {
                     await CloseAsync(false); // connect timeout
-                    throw new TimeoutException(string.Format(
-                        "Connect to [{0}] timeout [{1}].", _remoteEndPoint, SocketConfiguration.ConnectTimeout));
+                    throw new TimeoutException($"Connect to [{_remoteEndPoint}] timeout [{SocketConfiguration.ConnectTimeout}].");
                 }
 
-                var negotiator = NegotiateStream(new NetworkStream(_socket, true));
-                if (!negotiator.Wait(SocketConfiguration.ConnectTimeout))
+                var negotiatorTask = NegotiateStream(new NetworkStream(_socket, true));
+                if (await Task.WhenAny(negotiatorTask, Task.Delay(SocketConfiguration.ConnectTimeout)) != negotiatorTask)
                 {
                     await CloseAsync(false); // ssl negotiation timeout
-                    throw new TimeoutException(string.Format(
-                        "Negotiate SSL/TSL with remote [{0}] timeout [{1}].", _remoteEndPoint, SocketConfiguration.ConnectTimeout));
+                    throw new TimeoutException($"Negotiate SSL/TSL with remote [{_remoteEndPoint}] timeout [{SocketConfiguration.ConnectTimeout}].");
                 }
-                _stream = negotiator.Result;
+                _stream = negotiatorTask.Result;
 
                 if (_receiveBuffer == default(ArraySegment<byte>))
                     _receiveBuffer = SocketConfiguration.BufferManager.BorrowBuffer();
@@ -164,17 +162,17 @@ namespace Wombat.Network.Sockets
             }
             catch (Exception ex) // catch exceptions then log then re-throw
             {
-              
                 _logger?.LogError(ex.Message, ex);
                 await CloseAsync(true); // handle tcp connection error occurred
                 throw;
             }
         }
-        public void Connect(IPEndPoint remoteEndPoint)
+        public virtual void Connect(IPEndPoint remoteEndPoint)
         {
             if (remoteEndPoint == null)
-                throw new ArgumentNullException("remoteEP");
+                throw new ArgumentNullException(nameof(remoteEndPoint));
             _remoteEndPoint = remoteEndPoint;
+
             int origin = Interlocked.Exchange(ref _state, _connecting);
             if (!(origin == _none || origin == _closed))
             {
@@ -186,33 +184,25 @@ namespace Wombat.Network.Sockets
 
             try
             {
-
                 if (_isUdp)
                 {
                     _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-
                 }
                 else
                 {
                     _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
                 }
+
                 if (_localEndPoint != null) _socket.Bind(_localEndPoint);
                 SetSocketOptions();
-                var awaiter = _socket.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
-                if (!awaiter.Wait(SocketConfiguration.ConnectTimeout))
-                {
-                    Close(false); // connect timeout
-                    throw new TimeoutException(string.Format(
-                        "Connect to [{0}] timeout [{1}].", _remoteEndPoint, SocketConfiguration.ConnectTimeout));
-                }
+
+                _socket.Connect(_remoteEndPoint.Address, _remoteEndPoint.Port);
 
                 var negotiator = NegotiateStream(new NetworkStream(_socket, true));
                 if (!negotiator.Wait(SocketConfiguration.ConnectTimeout))
                 {
                     Close(false); // ssl negotiation timeout
-                    throw new TimeoutException(string.Format(
-                        "Negotiate SSL/TSL with remote [{0}] timeout [{1}].", _remoteEndPoint, SocketConfiguration.ConnectTimeout));
+                    throw new TimeoutException($"Negotiate SSL/TSL with remote [{_remoteEndPoint}] timeout [{SocketConfiguration.ConnectTimeout}].");
                 }
                 _stream = negotiator.Result;
 
@@ -229,12 +219,10 @@ namespace Wombat.Network.Sockets
             }
             catch (Exception ex) // catch exceptions then log then re-throw
             {
-
                 _logger?.LogError(ex.Message, ex);
-                Close(false); // handle tcp connection error occurred
+                Close(true); // handle tcp connection error occurred
                 throw;
             }
-
         }
 
 

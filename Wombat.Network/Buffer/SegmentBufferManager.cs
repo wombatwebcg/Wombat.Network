@@ -22,17 +22,14 @@ namespace Wombat.Network
     /// </remarks>
     public class SegmentBufferManager : ISegmentBufferManager
     {
-        /// <summary>
-        /// 三元组计数
-        /// </summary>
         private const int TrialsCount = 100;
 
         private static SegmentBufferManager _defaultBufferManager;
 
-        private readonly int _segmentChunks;//分段块
-        private readonly int _chunkSize;//组块大小
-        private readonly int _segmentSize; //段大小
-        private readonly bool _allowedToCreateMemory;//允许创建内存
+        private readonly int _segmentChunks;
+        private readonly int _chunkSize;
+        private readonly int _segmentSize;
+        private readonly bool _allowedToCreateMemory;
 
         private readonly ConcurrentStack<ArraySegment<byte>> _buffers = new ConcurrentStack<ArraySegment<byte>>();
 
@@ -50,10 +47,6 @@ namespace Wombat.Network
             }
         }
 
-        /// <summary>
-        /// 设置默认缓冲区管理器
-        /// </summary>
-        /// <param name="manager"></param>
         public static void SetDefaultBufferManager(SegmentBufferManager manager)
         {
             if (manager == null)
@@ -61,51 +54,31 @@ namespace Wombat.Network
             _defaultBufferManager = manager;
         }
 
-        /// <summary>
-        /// 组块大小
-        /// </summary>
         public int ChunkSize
         {
             get { return _chunkSize; }
         }
 
-        /// <summary>
-        /// 段数量
-        /// </summary>
         public int SegmentsCount
         {
             get { return _segments.Count; }
         }
 
-        /// <summary>
-        /// 分段块数量
-        /// </summary>
         public int SegmentChunksCount
         {
             get { return _segmentChunks; }
         }
 
-        /// <summary>
-        /// 可用缓存数量
-        /// </summary>
         public int AvailableBuffers
         {
             get { return _buffers.Count; }
         }
 
-        /// <summary>
-        /// 缓冲区总大小
-        /// </summary>
         public int TotalBufferSize
         {
             get { return _segments.Count * _segmentSize; }
         }
 
-        /// <summary>
-        /// 构造器
-        /// </summary>
-        /// <param name="segmentChunks"></param>
-        /// <param name="chunkSize"></param>
         public SegmentBufferManager(int segmentChunks, int chunkSize)
             : this(segmentChunks, chunkSize, 1) { }
 
@@ -162,9 +135,6 @@ namespace Wombat.Network
             }
         }
 
-        /// <summary>
-        /// <inheritdoc/>
-        /// </summary>
         public ArraySegment<byte> BorrowBuffer()
         {
             int trial = 0;
@@ -179,9 +149,6 @@ namespace Wombat.Network
             throw new UnableToAllocateBufferException();
         }
 
-        /// <summary>
-        /// <inheritdoc/>
-        /// </summary>
         public IEnumerable<ArraySegment<byte>> BorrowBuffers(int count)
         {
             var result = new ArraySegment<byte>[count];
@@ -215,9 +182,6 @@ namespace Wombat.Network
             }
         }
 
-        /// <summary>
-        /// <inheritdoc/>
-        /// </summary>
         public void ReturnBuffer(ArraySegment<byte> buffer)
         {
             if (ValidateBuffer(buffer))
@@ -226,9 +190,6 @@ namespace Wombat.Network
             }
         }
 
-        /// <summary>
-        /// <inheritdoc/>
-        /// </summary>
         public void ReturnBuffers(IEnumerable<ArraySegment<byte>> buffers)
         {
             if (buffers == null)
@@ -243,9 +204,6 @@ namespace Wombat.Network
             }
         }
 
-        /// <summary>
-        /// <inheritdoc/>
-        /// </summary>
         public void ReturnBuffers(params ArraySegment<byte>[] buffers)
         {
             if (buffers == null)
@@ -260,9 +218,6 @@ namespace Wombat.Network
             }
         }
 
-        /// <summary>
-        /// <inheritdoc/>
-        /// </summary>
         private bool ValidateBuffer(ArraySegment<byte> buffer)
         {
             if (buffer.Array == null || buffer.Count == 0 || buffer.Array.Length < buffer.Offset + buffer.Count)

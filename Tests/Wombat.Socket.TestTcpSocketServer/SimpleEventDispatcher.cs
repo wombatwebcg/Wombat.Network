@@ -17,7 +17,7 @@ namespace Wombat.Socket.TestTcpSocketServer
         public async Task OnSessionDataReceived(TcpSocketSession session, byte[] data, int offset, int count)
         {
             var text = Encoding.UTF8.GetString(data, offset, count);
-            Console.Write($"Client : {session.RemoteEndPoint} --> ");
+            Console.Write($"SendToClient : {session.RemoteEndPoint} --> ");
             if (count < 1024 * 1024 * 1)
             {
                 Console.WriteLine(text+ DateTime.Now.ToString("HH:mm:ss:fff"));

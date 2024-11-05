@@ -40,7 +40,7 @@ namespace Wombat.Socket.TestTcpSocketServer
                 //config.FrameBuilder = new LengthFieldBasedFrameBuilder();
                 IPEndPoint remoteEP = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 22222);
 
-                _server = new TcpSocketServer(remoteEP, new SimpleEventDispatcher(), config, frameBuilder: new LengthPrefixedFrameBuilder());
+                _server = new TcpSocketServer(remoteEP, new SimpleEventDispatcher(), config, frameBuilder: new RawBufferFrameBuilder());
                 _server.UsgLogger(logger);
                 _server.Listen();
 
@@ -58,7 +58,7 @@ namespace Wombat.Socket.TestTcpSocketServer
                             if (text == "many")
                             {
                                 text = new string('x', 1024);
-                                for (int i = 0; i < 100; i++)
+                                for (int i = 0; i < 10000; i++)
                                 {
                                     await _server.BroadcastAsync(Encoding.UTF8.GetBytes(text));
                                     Console.WriteLine("Server [{0}] broadcasts text -> [{1}].", _server.ListenedEndPoint, text);
@@ -73,9 +73,13 @@ namespace Wombat.Socket.TestTcpSocketServer
                             else if (text == "big10k")
                             {
                                 text = new string('x', 1024 * 10);
-                                await _server.BroadcastAsync(Encoding.UTF8.GetBytes(text));
-                                Console.WriteLine("Server [{0}] broadcasts text -> [{1} Bytes].", _server.ListenedEndPoint, text.Length);
-                            }
+                                for (int i = 0; i < 10000; i++)
+                                {
+
+                                    await _server.BroadcastAsync(Encoding.UTF8.GetBytes(text));
+                                    Console.WriteLine("Server [{0}] broadcasts text -> [{1} Bytes].", _server.ListenedEndPoint, text.Length);
+                                }
+                                }
                             else if (text == "big100k")
                             {
                                 text = new string('x', 1024 * 100);
@@ -90,9 +94,13 @@ namespace Wombat.Socket.TestTcpSocketServer
                             }
                             else if (text == "big10m")
                             {
-                                text = new string('x', 1024 * 1024 * 10);
-                                await _server.BroadcastAsync(Encoding.UTF8.GetBytes(text));
-                                Console.WriteLine("Server [{0}] broadcasts text -> [{1} Bytes].", _server.ListenedEndPoint, text.Length);
+                                for (int i = 0; i < 10000; i++)
+                                {
+
+                                    text = new string('x', 1024 * 1024 * 10);
+                                    await _server.BroadcastAsync(Encoding.UTF8.GetBytes(text));
+                                    Console.WriteLine("Server [{0}] broadcasts text -> [{1} Bytes].", _server.ListenedEndPoint, text.Length);
+                                }
                             }
                             else if (text == "big100m")
                             {

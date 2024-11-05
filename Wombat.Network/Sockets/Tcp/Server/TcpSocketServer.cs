@@ -121,6 +121,7 @@ namespace Wombat.Network.Sockets
             try
             {
                 _listener = new TcpListener(this.ListenedEndPoint);
+
                 SetSocketOptions();
 
                 _listener.Start(_configuration.PendingConnectionBacklog);
@@ -130,7 +131,7 @@ namespace Wombat.Network.Sockets
                     await Accept();
                 },
                 TaskCreationOptions.LongRunning)
-                .Forget();
+               .Forget();
             }
             catch (Exception ex) when (!ShouldThrow(ex)) { }
         }
