@@ -398,7 +398,6 @@ namespace Wombat.Network.Sockets
             finally
             {
                 _stream = null;
-                _socket = null;
             }
 
             if (_receiveBuffer != default(ArraySegment<byte>))

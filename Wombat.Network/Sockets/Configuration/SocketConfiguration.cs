@@ -62,8 +62,6 @@ namespace Wombat.Network.Sockets
         /// </summary>
         public bool ReuseAddress { get; set; }
 
-
-
         /// <summary>
         /// 获取或设置连接操作的超时时间
         /// </summary>
