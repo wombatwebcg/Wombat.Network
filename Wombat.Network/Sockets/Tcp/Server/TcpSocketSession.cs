@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.IO;
 using System.Net;
 using System.Net.Security;
@@ -8,6 +7,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using Wombat.Network;
+using Microsoft.Extensions.Logging;
 
 namespace Wombat.Network.Sockets
 {
@@ -15,12 +15,11 @@ namespace Wombat.Network.Sockets
     {
         #region Fields
 
-        private static ILogger _logger;
+        private static readonly ILogger _logger;
         private TcpClient _tcpClient;
         private readonly TcpSocketServerConfiguration _configuration;
         private readonly ISegmentBufferManager _bufferManager;
         private readonly ITcpSocketServerEventDispatcher _dispatcher;
-        private readonly IFrameBuilder _frameBuilder;
         private readonly TcpSocketServer _server;
         private readonly string _sessionKey;
         private Stream _stream;
@@ -44,8 +43,6 @@ namespace Wombat.Network.Sockets
             TcpSocketServerConfiguration configuration,
             ISegmentBufferManager bufferManager,
             ITcpSocketServerEventDispatcher dispatcher,
-            IFrameBuilder frameBuilder,
-            ILogger logger,
             TcpSocketServer server)
         {
             if (tcpClient == null)
@@ -58,18 +55,14 @@ namespace Wombat.Network.Sockets
                 throw new ArgumentNullException("dispatcher");
             if (server == null)
                 throw new ArgumentNullException("server");
-            //if (logger == null)
-            //    throw new ArgumentNullException("server");
 
-            _logger = logger;
             _tcpClient = tcpClient;
             _configuration = configuration;
             _bufferManager = bufferManager;
             _dispatcher = dispatcher;
             _server = server;
-            _frameBuilder = frameBuilder;
+
             _sessionKey = Guid.NewGuid().ToString();
-            Security = Security ?? new ServerSecurityOptions();
             this.StartTime = DateTime.UtcNow;
 
             SetSocketOptions();
@@ -90,31 +83,26 @@ namespace Wombat.Network.Sockets
         public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
         public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : _localEndPoint; } }
 
-        public System.Net.Sockets.Socket Socket { get { return Connected ? _tcpClient.Client : null; } }
-
+        public Socket Socket { get { return Connected ? _tcpClient.Client : null; } }
         public Stream Stream { get { return _stream; } }
-
         public TcpSocketServer Server { get { return _server; } }
 
-        public ServerSecurityOptions Security { get; set; }
-
-
-        public ConnectionState State
+        public TcpSocketConnectionState State
         {
             get
             {
                 switch (_state)
                 {
                     case _none:
-                        return ConnectionState.None;
+                        return TcpSocketConnectionState.None;
                     case _connecting:
-                        return ConnectionState.Connecting;
+                        return TcpSocketConnectionState.Connecting;
                     case _connected:
-                        return ConnectionState.Connected;
+                        return TcpSocketConnectionState.Connected;
                     case _disposed:
-                        return ConnectionState.Closed;
+                        return TcpSocketConnectionState.Closed;
                     default:
-                        return ConnectionState.Closed;
+                        return TcpSocketConnectionState.Closed;
                 }
             }
         }
@@ -162,9 +150,11 @@ namespace Wombat.Network.Sockets
                     throw new ObjectDisposedException("This tcp socket session has been disposed after connected.");
                 }
 
-                _logger?.LogDebug($"Session started for [{this.RemoteEndPoint}] on [{this.StartTime.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff")}] " +
-                    $"in dispatcher [{_dispatcher.GetType().Name}] with session count [{this.Server.SessionCount}]."
-                    );
+                _logger?.LogDebug("Session started for [{0}] on [{1}] in dispatcher [{2}] with session count [{3}].",
+                    this.RemoteEndPoint,
+                    this.StartTime.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff"),
+                    _dispatcher.GetType().Name,
+                    this.Server.SessionCount);
                 bool isErrorOccurredInUserSide = false;
                 try
                 {
@@ -187,7 +177,7 @@ namespace Wombat.Network.Sockets
             }
             catch (Exception ex) // catch exceptions then log then re-throw
             {
-                _logger?.LogError($"Session [{this}] exception occurred, [{ ex.Message}].");
+                _logger?.LogError(string.Format("Session [{0}] exception occurred, [{1}].", this, ex.Message), ex);
                 await Close(true); // handle tcp connection error occurred
                 throw;
             }
@@ -203,7 +193,7 @@ namespace Wombat.Network.Sockets
                 int payloadCount;
                 int consumedLength = 0;
 
-                while (State == ConnectionState.Connected)
+                while (State == TcpSocketConnectionState.Connected)
                 {
                     int receiveCount = await _stream.ReadAsync(
                         _receiveBuffer.Array,
@@ -222,7 +212,7 @@ namespace Wombat.Network.Sockets
                         payloadOffset = 0;
                         payloadCount = 0;
 
-                        if (_frameBuilder.Decoder.TryDecodeFrame(
+                        if (_configuration.FrameBuilder.Decoder.TryDecodeFrame(
                             _receiveBuffer.Array,
                             _receiveBuffer.Offset + consumedLength,
                             _receiveBufferOffset - consumedLength,
@@ -290,7 +280,7 @@ namespace Wombat.Network.Sockets
 
         private async Task<Stream> NegotiateStream(Stream stream)
         {
-            if (!Security.SslEnabled)
+            if (!_configuration.SslEnabled)
                 return stream;
 
             var validateRemoteCertificate = new RemoteCertificateValidationCallback(
@@ -303,10 +293,11 @@ namespace Wombat.Network.Sockets
                     if (sslPolicyErrors == SslPolicyErrors.None)
                         return true;
 
-                    if (Security.SslPolicyErrorsBypassed)
+                    if (_configuration.SslPolicyErrorsBypassed)
                         return true;
                     else
-                        _logger?.LogError($"Session [{this}] error occurred when validating remote certificate: [{this.RemoteEndPoint}], [{sslPolicyErrors}].");
+                        _logger?.LogError("Session [{0}] error occurred when validating remote certificate: [{1}], [{2}].",
+                            this, this.RemoteEndPoint, sslPolicyErrors);
 
                     return false;
                 });
@@ -316,37 +307,40 @@ namespace Wombat.Network.Sockets
                 false,
                 validateRemoteCertificate,
                 null,
-                Security.SslEncryptionPolicy);
+                _configuration.SslEncryptionPolicy);
 
-            if (!Security.SslClientCertificateRequired)
+            if (!_configuration.SslClientCertificateRequired)
             {
                 await sslStream.AuthenticateAsServerAsync(
-                    Security.SslServerCertificate); // The X509Certificate used to authenticate the server.
+                    _configuration.SslServerCertificate); // The X509Certificate used to authenticate the server.
             }
             else
             {
                 await sslStream.AuthenticateAsServerAsync(
-                    Security.SslServerCertificate, // The X509Certificate used to authenticate the server.
-                    Security.SslClientCertificateRequired, // A Boolean value that specifies whether the client must supply a certificate for authentication.
-                    Security.SslEnabledProtocols, // The SslProtocols value that represents the protocol used for authentication.
-                    Security.SslCheckCertificateRevocation); // A Boolean value that specifies whether the certificate revocation list is checked during authentication.
+                    _configuration.SslServerCertificate, // The X509Certificate used to authenticate the server.
+                    _configuration.SslClientCertificateRequired, // A Boolean value that specifies whether the client must supply a certificate for authentication.
+                    _configuration.SslEnabledProtocols, // The SslProtocols value that represents the protocol used for authentication.
+                    _configuration.SslCheckCertificateRevocation); // A Boolean value that specifies whether the certificate revocation list is checked during authentication.
             }
 
             // When authentication succeeds, you must check the IsEncrypted and IsSigned properties 
             // to determine what security services are used by the SslStream. 
             // Check the IsMutuallyAuthenticated property to determine whether mutual authentication occurred.
-                        _logger?.LogDebug($"Ssl Stream: SslProtocol[{sslStream.SslProtocol}], " +
-                $"IsServer[{sslStream.IsServer}]," +
-                $" IsAuthenticated[{sslStream.IsAuthenticated}], " +
-                $"IsEncrypted[{sslStream.IsEncrypted}], IsSigned[{sslStream.IsSigned}], " +
-                $"IsMutuallyAuthenticated[{sslStream.IsMutuallyAuthenticated}]," +
-                $"HashAlgorithm[{sslStream.HashAlgorithm}]," +
-                $" HashStrength[{sslStream.HashStrength}]," +
-                $" KeyExchangeAlgorithm[{sslStream.KeyExchangeAlgorithm}], " +
-                $"KeyExchangeStrength[{sslStream.KeyExchangeStrength}]," +
-                $" CipherAlgorithm[{sslStream.CipherAlgorithm}], " +
-                $"CipherStrength[{sslStream.CipherStrength}]."
-                );
+            _logger?.LogDebug(
+                "Ssl Stream: SslProtocol[{0}], IsServer[{1}], IsAuthenticated[{2}], IsEncrypted[{3}], IsSigned[{4}], IsMutuallyAuthenticated[{5}], "
+                + "HashAlgorithm[{6}], HashStrength[{7}], KeyExchangeAlgorithm[{8}], KeyExchangeStrength[{9}], CipherAlgorithm[{10}], CipherStrength[{11}].",
+                sslStream.SslProtocol,
+                sslStream.IsServer,
+                sslStream.IsAuthenticated,
+                sslStream.IsEncrypted,
+                sslStream.IsSigned,
+                sslStream.IsMutuallyAuthenticated,
+                sslStream.HashAlgorithm,
+                sslStream.HashStrength,
+                sslStream.KeyExchangeAlgorithm,
+                sslStream.KeyExchangeStrength,
+                sslStream.CipherAlgorithm,
+                sslStream.CipherStrength);
 
             return sslStream;
         }
@@ -371,9 +365,11 @@ namespace Wombat.Network.Sockets
 
             if (shallNotifyUserSide)
             {
-               _logger?.LogDebug($"Session closed for [{this.RemoteEndPoint}] " +
-                    $"on [{DateTime.UtcNow.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff")}] " +
-                    $"in dispatcher [{_dispatcher.GetType().Name}] with session count [{this.Server.SessionCount - 1}].");
+                _logger?.LogDebug("Session closed for [{0}] on [{1}] in dispatcher [{2}] with session count [{3}].",
+                    this.RemoteEndPoint,
+                    DateTime.UtcNow.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff"),
+                    _dispatcher.GetType().Name,
+                    this.Server.SessionCount - 1);
                 try
                 {
                     await _dispatcher.OnSessionClosed(this);
@@ -499,32 +495,6 @@ namespace Wombat.Network.Sockets
 
         #region Send
 
-
-        public void Send(byte[] data)
-        {
-            Send(data, 0, data.Length);
-        }
-
-        public  void Send(byte[] data, int offset, int count)
-        {
-            BufferValidator.ValidateBuffer(data, offset, count, "data");
-
-            if (State != ConnectionState.Connected)
-            {
-                throw new InvalidOperationException("This client has not connected to server.");
-            }
-
-            try
-            {
-                _stream.Write(data, offset, count);
-            }
-            catch (Exception ex)
-            {
-                HandleSendOperationException(ex).Wait(_configuration.SendTimeout);
-            }
-
-        }
-
         public async Task SendAsync(byte[] data)
         {
             await SendAsync(data, 0, data.Length);
@@ -534,7 +504,7 @@ namespace Wombat.Network.Sockets
         {
             BufferValidator.ValidateBuffer(data, offset, count, "data");
 
-            if (State != ConnectionState.Connected)
+            if (State != TcpSocketConnectionState.Connected)
             {
                 throw new InvalidOperationException("This session has not connected.");
             }
@@ -544,7 +514,7 @@ namespace Wombat.Network.Sockets
                 byte[] frameBuffer;
                 int frameBufferOffset;
                 int frameBufferLength;
-                _frameBuilder.Encoder.EncodeFrame(data, offset, count, out frameBuffer, out frameBufferOffset, out frameBufferLength);
+                _configuration.FrameBuilder.Encoder.EncodeFrame(data, offset, count, out frameBuffer, out frameBufferOffset, out frameBufferLength);
 
                 await _stream.WriteAsync(frameBuffer, frameBufferOffset, frameBufferLength);
             }
@@ -553,8 +523,6 @@ namespace Wombat.Network.Sockets
                 await HandleSendOperationException(ex);
             }
         }
-
-
 
         #endregion
     }

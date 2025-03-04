@@ -2,20 +2,8 @@
 
 namespace Wombat.Network
 {
-    /// <summary>
-    /// 缓冲验证器
-    /// </summary>
     public class BufferValidator
     {
-        /// <summary>
-        /// 验证缓冲区
-        /// </summary>
-        /// <param name="buffer"></param>
-        /// <param name="offset"></param>
-        /// <param name="count"></param>
-        /// <param name="bufferParameterName"></param>
-        /// <param name="offsetParameterName"></param>
-        /// <param name="countParameterName"></param>
         public static void ValidateBuffer(byte[] buffer, int offset, int count,
             string bufferParameterName = null,
             string offsetParameterName = null,

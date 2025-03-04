@@ -1,9 +1,11 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace Wombat.Network.WebSockets
 {
-    internal class InternalAsyncWebSocketClientMessageDispatcherImplementation : IWebSocketClientMessageDispatcher
+    internal class InternalWebSocketClientMessageDispatcherImplementation : IWebSocketClientMessageDispatcher
     {
         private Func<WebSocketClient, string, Task> _onServerTextReceived;
         private Func<WebSocketClient, byte[], int, int, Task> _onServerBinaryReceived;
@@ -14,11 +16,11 @@ namespace Wombat.Network.WebSockets
         private Func<WebSocketClient, byte[], int, int, Task> _onServerFragmentationStreamContinued;
         private Func<WebSocketClient, byte[], int, int, Task> _onServerFragmentationStreamClosed;
 
-        public InternalAsyncWebSocketClientMessageDispatcherImplementation()
+        public InternalWebSocketClientMessageDispatcherImplementation()
         {
         }
 
-        public InternalAsyncWebSocketClientMessageDispatcherImplementation(
+        public InternalWebSocketClientMessageDispatcherImplementation(
             Func<WebSocketClient, string, Task> onServerTextReceived,
             Func<WebSocketClient, byte[], int, int, Task> onServerDataReceived,
             Func<WebSocketClient, Task> onServerConnected,
@@ -31,7 +33,7 @@ namespace Wombat.Network.WebSockets
             _onServerDisconnected = onServerDisconnected;
         }
 
-        public InternalAsyncWebSocketClientMessageDispatcherImplementation(
+        public InternalWebSocketClientMessageDispatcherImplementation(
             Func<WebSocketClient, string, Task> onServerTextReceived,
             Func<WebSocketClient, byte[], int, int, Task> onServerDataReceived,
             Func<WebSocketClient, Task> onServerConnected,
@@ -59,15 +61,8 @@ namespace Wombat.Network.WebSockets
 
         public async Task OnServerTextReceived(WebSocketClient client, string text)
         {
-            try
-            {
-                if (_onServerTextReceived != null)
-                    await _onServerTextReceived(client, text);
-            }
-            catch(Exception ex)
-            {
-                Console.WriteLine(text);
-            }
+            if (_onServerTextReceived != null)
+                await _onServerTextReceived(client, text);
         }
 
         public async Task OnServerBinaryReceived(WebSocketClient client, byte[] data, int offset, int count)

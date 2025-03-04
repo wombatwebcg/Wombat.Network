@@ -6,30 +6,17 @@ using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Wombat.Logger;
+using Wombat.Network;
 using Wombat.Network.Sockets;
 
 namespace Wombat.Socket.TestTcpSocketClient 
-{ 
+{
     class Program
     {
-        static TcpSocketClient _client1;
-        static TcpSocketClient _client2;
+        static TcpSocketClient _client;
+
         static void Main(string[] args)
         {
-            var services = new ServiceCollection();
-
-            services.AddLogging(builder =>
-            {
-                builder.SetMinimumLevel(level: LogLevel.Trace);
-                builder.AddConsole();
-                builder.AddDefalutFileLogger();
-            });
-            ServiceProvider sp = services.BuildServiceProvider();
-            // create logger
-            ILogger<Program> logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Program>();
-
-            logger.LogInformation("Example log message");
 
             try
             {
@@ -41,118 +28,132 @@ namespace Wombat.Socket.TestTcpSocketClient
 
                 //config.FrameBuilder = new FixedLengthFrameBuilder(20000);
                 //config.FrameBuilder = new RawBufferFrameBuilder();
-                //config.FrameBuilder = new LineBasedFrameBuilder();
+                config.FrameBuilder = new LineBasedFrameBuilder();
                 //config.FrameBuilder = new LengthPrefixedFrameBuilder();
-                //config.FrameBuilder = new LengthFieldBasedFrameBuilder();
+                config.FrameBuilder = new LengthFieldBasedFrameBuilder();
 
                 IPEndPoint remoteEP = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 22222);
-                _client1 = new TcpSocketClient(dispatcher: new SimpleEventDispatcher(),configuration: new TcpSocketClientConfiguration(),frameBuilder:new RawBufferFrameBuilder());
-                _client2 = new TcpSocketClient(dispatcher: new SimpleEventDispatcher(),configuration: new TcpSocketClientConfiguration(), frameBuilder: new RawBufferFrameBuilder());
-                _client2.UsgLogger(logger);
-                _client1.UsgLogger(logger);
-                _client1.UseSubscribe();
-                _client2.UseSubscribe();
-                _client1.Connect(remoteEP);
-                _client2.Connect(remoteEP);
-                //Console.WriteLine("TCP client has connected to server [{0}].", remoteEP);
-                //Console.WriteLine("Type something to send to server...");
+                _client = new TcpSocketClient(remoteEP, new SimpleEventDispatcher(), config);
+                // 创建一个取消令牌源
+                var cancellationTokenSource = new CancellationTokenSource();
+
+                //// 设置连接的超时时间（可选）
+                //cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(10));  // 设置超时为10秒
+
+                // 调用 Connect 方法，传递 CancellationToken
+                _client.Connect().ConfigureAwait(false).GetAwaiter().GetResult(); 
+                Console.WriteLine("连接成功！");
+            
+                Console.WriteLine("TCP client has connected to server [{0}].", remoteEP);
+                Console.WriteLine("Type something to send to server...");
                 while (true)
                 {
                     try
                     {
                         string text = Console.ReadLine();
-                        //if (text == "quit")
-                        //    break;
-                        //Task.Run(async () =>
-                        //{
-                        //    if (text == "many")
-                        //    {
-                        //        text = "";
-                        //        for (int i = 0; i < 100; i++)
-                        //        {
-                        //            text += $"{i},";
-                        //        }
+                        if (text == "quit")
+                            break;
+                        Task.Run(async () =>
+                        {
+                            if (text == "many")
+                            {
+                                text = new string('x', 8192);
+                                for (int i = 0; i < 1000000; i++)
+                                {
+                                    await _client.SendAsync(Encoding.UTF8.GetBytes(text),cancellationTokenSource.Token);
+                                    Console.WriteLine("Client [{0}] send text -> [{1}].", _client.LocalEndPoint, text);
+                                }
+                            }
+                            else if (text == "big1k")
+                            {
+                                text = new string('x', 1024 * 1);
+                                await _client.SendAsync(Encoding.UTF8.GetBytes(text), cancellationTokenSource.Token);
+                                Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, text.Length);
+                            }
+                            else if (text == "big10k")
+                            {
+                                text = new string('x', 1024 * 10);
+                                await _client.SendAsync(Encoding.UTF8.GetBytes(text), cancellationTokenSource.Token);
+                                Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, text.Length);
+                            }
+                            else if (text == "big100k")
+                            {
+                                text = new string('x', 1024 * 100);
+                                await _client.SendAsync(Encoding.UTF8.GetBytes(text), cancellationTokenSource.Token);
+                                Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, text.Length);
+                            }
+                            else if (text == "big1m")
+                            {
+                                text = new string('x', 1024 * 1024 * 1);
+                                await _client.SendAsync(Encoding.UTF8.GetBytes(text), cancellationTokenSource.Token);
+                                Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, text.Length);
+                            }
+                            else if (text == "big10m")
+                            {
+                                text = new string('x', 1024 * 1024 * 10);
+                                await _client.SendAsync(Encoding.UTF8.GetBytes(text), cancellationTokenSource.Token);
+                                Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, text.Length);
+                            }
+                            else if (text == "big100m")
+                            {
+                                text = new string('x', 1024 * 1024 * 100);
+                                await _client.SendAsync(Encoding.UTF8.GetBytes(text), cancellationTokenSource.Token);
+                                Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, text.Length);
+                            }
+                            else if (text == "big1g")
+                            {
+                                try
+                                {
+                                    // 每个字符为 2 个字节（UTF-16 编码）
+                                    long targetSizeInBytes = 1L * 1024 * 1024 * 1024; // 1GB
+                                    long targetLength = targetSizeInBytes/2 ; // 字符串长度
 
-                        //        //text = new string('123456789', 10);
-                        //        for (int i = 0; i < 100; i++)
-                        //        {
-                        //            byte[] buff1 = new byte[200] ;
-                        //            await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //            var c1 = _client1.ReceiveAsync(buff1,0, buff1.Length).Result;
-                        //            byte[] buff2 = new byte[200];
+                                    char fillChar = 'A'; // 用于填充的字符
 
-                        //            await _client2.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //            var c2 =  _client2.ReceiveAsync(buff2, 0, buff2.Length).Result;
-                        //            Thread.Sleep(100);
-                        //            logger.LogDebug("Client [{0}] send text -> [{1}].", _client1.LocalEndPoint, Encoding.ASCII.GetString(buff1).Trim());
-                        //            Thread.Sleep(100);
-                        //            logger.LogDebug("Client [{0}] send text -> [{1}].", _client2.LocalEndPoint, Encoding.ASCII.GetString(buff2).Trim());
+                                    // 使用 String 构造函数创建大字符串
+                                    string largeString = new string(fillChar, (int)Math.Min(targetLength, int.MaxValue));
 
-                        //        }
-                        //    }
-                        //    else if (text == "big1k")
-                        //    {
-                        //        text = new string('x', 1024 * 1);
-                        //        await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //        Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client1.LocalEndPoint, text.Length);
-                        //    }
-                        //    else if (text == "big10k")
-                        //    {
-                        //        text = new string('x', 1024 * 10);
-                        //        await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //        Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client1.LocalEndPoint, text.Length);
-                        //    }
-                        //    else if (text == "big100k")
-                        //    {
-                        //        text = new string('x', 1024 * 100);
-                        //        await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //        Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client1.LocalEndPoint, text.Length);
-                        //    }
-                        //    else if (text == "big1m")
-                        //    {
-                        //        text = new string('x', 1024 * 1024 * 1);
-                        //        await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //        Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client1.LocalEndPoint, text.Length);
-                        //    }
-                        //    else if (text == "big10m")
-                        //    {
-                        //        text = new string('x', 1024 * 1024 * 10);
-                        //        await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //        Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client1.LocalEndPoint, text.Length);
-                        //    }
-                        //    else if (text == "big100m")
-                        //    {
-                        //        text = new string('x', 1024 * 1024 * 100);
-                        //        await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //        Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client1.LocalEndPoint, text.Length);
-                        //    }
-                        //    else if (text == "big1g")
-                        //    {
-                        //        text = new string('x', 1024 * 1024 * 1024);
-                        //        await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //        Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client1.LocalEndPoint, text.Length);
-                        //    }
-                        //    else
-                        //    {
-                        //        await _client1.SendAsync(Encoding.UTF8.GetBytes(text));
-                        //        Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client1.LocalEndPoint, text.Length);
-                        //    }
-                        //});
+                                    // 如果需要更大的字符串，可以分块拼接
+                                    while (largeString.Length < targetLength)
+                                    {
+                                        largeString += largeString;
+                                        if (largeString.Length > targetLength)
+                                        {
+                                            largeString = largeString.Substring(0, (int)targetLength);
+                                        }
+                                    }
+
+
+                                    //StringBuilder sb = new StringBuilder();
+                                    //sb.Append('x', 1024 * 1024 * 1024);  // 1GB
+                                    //text = sb.ToString();
+                                    await _client.SendAsync(Encoding.UTF8.GetBytes(largeString), cancellationTokenSource.Token);
+                                    Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, largeString.Length);
+                                }
+                                catch (Exception ex)
+                                {
+
+                                }
+                            }
+                            else
+                            {
+                                await _client.SendAsync(Encoding.UTF8.GetBytes(text), cancellationTokenSource.Token);
+                                Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, text.Length);
+                            }
+                        });
                     }
                     catch (Exception ex)
                     {
-                        logger.LogError(ex.Message, ex);
+                        //Logger.Get<Program>().Error(ex.Message, ex);
                     }
                 }
 
-                _client1.Shutdown();
-                _client2.Shutdown();
-
+                _client.Shutdown();
                 Console.WriteLine("TCP client has disconnected from server [{0}].", remoteEP);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex.Message, ex);
+                //Logger.Get<Program>().Error(ex.Message, ex);
             }
 
             Console.ReadKey();

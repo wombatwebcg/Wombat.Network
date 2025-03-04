@@ -1,11 +1,11 @@
-﻿using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace Wombat.Network.Sockets
 {
@@ -17,10 +17,9 @@ namespace Wombat.Network.Sockets
         private TcpListener _listener;
         private readonly ConcurrentDictionary<string, TcpSocketSession> _sessions = new ConcurrentDictionary<string, TcpSocketSession>();
         private readonly ITcpSocketServerEventDispatcher _dispatcher;
-        private static IFrameBuilder _frameBuilder;
         private readonly TcpSocketServerConfiguration _configuration;
 
-        private volatile int _state;
+        private int _state;
         private const int _none = 0;
         private const int _listening = 1;
         private const int _disposed = 5;
@@ -29,17 +28,19 @@ namespace Wombat.Network.Sockets
 
         #region Constructors
 
-        public TcpSocketServer(int listenedPort, ITcpSocketServerEventDispatcher dispatcher, TcpSocketServerConfiguration configuration = null, IFrameBuilder frameBuilder = null)
-            : this(IPAddress.Any, listenedPort, dispatcher, configuration, frameBuilder)
+        public TcpSocketServer(int listenedPort, ITcpSocketServerEventDispatcher dispatcher, TcpSocketServerConfiguration configuration = null)
+            : this(IPAddress.Any, listenedPort, dispatcher, configuration)
         {
         }
 
-        public TcpSocketServer(IPAddress listenedAddress, int listenedPort, ITcpSocketServerEventDispatcher dispatcher, TcpSocketServerConfiguration configuration = null, IFrameBuilder frameBuilder = null)
-            : this(new IPEndPoint(listenedAddress, listenedPort), dispatcher, configuration, frameBuilder)
+
+
+        public TcpSocketServer(IPAddress listenedAddress, int listenedPort, ITcpSocketServerEventDispatcher dispatcher, TcpSocketServerConfiguration configuration = null)
+            : this(new IPEndPoint(listenedAddress, listenedPort), dispatcher, configuration)
         {
         }
 
-        public TcpSocketServer(IPEndPoint listenedEndPoint, ITcpSocketServerEventDispatcher dispatcher,  TcpSocketServerConfiguration configuration = null, IFrameBuilder frameBuilder = null)
+        public TcpSocketServer(IPEndPoint listenedEndPoint, ITcpSocketServerEventDispatcher dispatcher, TcpSocketServerConfiguration configuration = null)
         {
             if (listenedEndPoint == null)
                 throw new ArgumentNullException("listenedEndPoint");
@@ -49,10 +50,10 @@ namespace Wombat.Network.Sockets
             this.ListenedEndPoint = listenedEndPoint;
             _dispatcher = dispatcher;
             _configuration = configuration ?? new TcpSocketServerConfiguration();
-            _frameBuilder = frameBuilder ?? new RawBufferFrameBuilder();
+
             if (_configuration.BufferManager == null)
                 throw new InvalidProgramException("The buffer manager in configuration cannot be null.");
-            if (_frameBuilder == null)
+            if (_configuration.FrameBuilder == null)
                 throw new InvalidProgramException("The frame handler in configuration cannot be null.");
         }
 
@@ -83,16 +84,10 @@ namespace Wombat.Network.Sockets
             Func<TcpSocketSession, Task> onSessionClosed = null,
             TcpSocketServerConfiguration configuration = null)
             : this(listenedEndPoint,
-                  new DefaultTcpServerSockeEventDispatcher(onSessionDataReceived, onSessionStarted, onSessionClosed),
+                  new DefaultTcpSocketServerEventDispatcher(onSessionDataReceived, onSessionStarted, onSessionClosed),
                   configuration)
         {
         }
-
-        public void UsgLogger(ILogger log)
-        {
-            _logger = log;
-        }
-
 
         #endregion
 
@@ -121,7 +116,6 @@ namespace Wombat.Network.Sockets
             try
             {
                 _listener = new TcpListener(this.ListenedEndPoint);
-
                 SetSocketOptions();
 
                 _listener.Start(_configuration.PendingConnectionBacklog);
@@ -131,11 +125,10 @@ namespace Wombat.Network.Sockets
                     await Accept();
                 },
                 TaskCreationOptions.LongRunning)
-               .Forget();
+                .Forget();
             }
             catch (Exception ex) when (!ShouldThrow(ex)) { }
         }
-
 
         public void Shutdown()
         {
@@ -205,11 +198,11 @@ namespace Wombat.Network.Sockets
 
         private async Task Process(TcpClient acceptedTcpClient)
         {
-            var session = new TcpSocketSession(acceptedTcpClient, _configuration, _configuration.BufferManager, _dispatcher,_frameBuilder,_logger ,this);
+            var session = new TcpSocketSession(acceptedTcpClient, _configuration, _configuration.BufferManager, _dispatcher, this);
 
             if (_sessions.TryAdd(session.SessionKey, session))
             {
-                _logger?.LogDebug($"New session [{session}]." );
+                _logger?.LogDebug("New session [{0}].", session);
                 try
                 {
                     await session.Start();
@@ -223,7 +216,7 @@ namespace Wombat.Network.Sockets
                     TcpSocketSession throwAway;
                     if (_sessions.TryRemove(session.SessionKey, out throwAway))
                     {
-                        _logger?.LogDebug($"Close session [{throwAway}].");
+                        _logger?.LogDebug("Close session [{0}].", throwAway);
                     }
                 }
             }
@@ -239,6 +232,14 @@ namespace Wombat.Network.Sockets
                 return false;
             }
             return true;
+        }
+
+        #endregion
+
+        #region Logger
+        public void UseLogger(ILogger logger)
+        {
+            _logger = logger;
         }
 
         #endregion
@@ -259,7 +260,7 @@ namespace Wombat.Network.Sockets
             }
             else
             {
-                _logger?.LogWarning($"Cannot find session [{sessionKey}].");
+                _logger?.LogWarning("Cannot find session [{0}].", sessionKey);
             }
         }
 
@@ -277,7 +278,7 @@ namespace Wombat.Network.Sockets
             }
             else
             {
-                _logger?.LogWarning($"Cannot find session [{session}].");
+                _logger?.LogWarning("Cannot find session [{0}].", session);
             }
         }
 

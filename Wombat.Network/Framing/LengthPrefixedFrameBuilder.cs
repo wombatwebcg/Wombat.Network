@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Wombat.Network.Sockets
+namespace Wombat.Network
 {
     // A high-level overview of the framing is given in the following figure. 
     //  0                   1                   2                   3

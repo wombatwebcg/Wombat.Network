@@ -21,11 +21,10 @@ namespace Wombat.Network.WebSockets
     {
         #region Fields
 
-        private static  ILogger _logger;
-        private Socket _socket;
+        private static readonly ILogger _logger ;
+        private TcpClient _tcpClient;
         private readonly IWebSocketClientMessageDispatcher _dispatcher;
         private readonly WebSocketClientConfiguration _configuration;
-        private readonly ClientSecurityOptions _securityOptions;
         private readonly IFrameBuilder _frameBuilder = new WebSocketFrameBuilder();
         private IPEndPoint _remoteEndPoint;
         private Stream _stream;
@@ -52,8 +51,7 @@ namespace Wombat.Network.WebSockets
 
         #region Constructors
 
-        public WebSocketClient(Uri uri, IWebSocketClientMessageDispatcher dispatcher, WebSocketClientConfiguration configuration = null
-            , ClientSecurityOptions securityOptions = null)
+        public WebSocketClient(Uri uri, IWebSocketClientMessageDispatcher dispatcher, WebSocketClientConfiguration configuration = null)
         {
             if (uri == null)
                 throw new ArgumentNullException("uri");
@@ -68,14 +66,10 @@ namespace Wombat.Network.WebSockets
             _remoteEndPoint = ResolveRemoteEndPoint(_uri);
             _dispatcher = dispatcher;
             _configuration = configuration ?? new WebSocketClientConfiguration();
-            _securityOptions = securityOptions ?? new ClientSecurityOptions();
             _sslEnabled = uri.Scheme.ToLowerInvariant() == "wss";
 
             if (_configuration.BufferManager == null)
                 throw new InvalidProgramException("The buffer manager in configuration cannot be null.");
-            if(_sslEnabled&_securityOptions==null)
-                throw new InvalidProgramException("The security option in configuration cannot be null.");
-
         }
 
         public WebSocketClient(Uri uri,
@@ -85,7 +79,7 @@ namespace Wombat.Network.WebSockets
             Func<WebSocketClient, Task> onServerDisconnected = null,
             WebSocketClientConfiguration configuration = null)
             : this(uri,
-                 new InternalAsyncWebSocketClientMessageDispatcherImplementation(
+                 new InternalWebSocketClientMessageDispatcherImplementation(
                      onServerTextReceived, onServerBinaryReceived, onServerConnected, onServerDisconnected),
                  configuration)
         {
@@ -101,7 +95,7 @@ namespace Wombat.Network.WebSockets
             Func<WebSocketClient, byte[], int, int, Task> onServerFragmentationStreamClosed = null,
             WebSocketClientConfiguration configuration = null)
             : this(uri,
-                 new InternalAsyncWebSocketClientMessageDispatcherImplementation(
+                 new InternalWebSocketClientMessageDispatcherImplementation(
                      onServerTextReceived, onServerBinaryReceived, onServerConnected, onServerDisconnected,
                      onServerFragmentationStreamOpened, onServerFragmentationStreamContinued, onServerFragmentationStreamClosed),
                  configuration)
@@ -144,9 +138,9 @@ namespace Wombat.Network.WebSockets
 
         #region Properties
 
-        private bool Connected { get { return _socket != null && _socket.Connected; } }
-        public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_socket.RemoteEndPoint : _remoteEndPoint; } }
-        public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_socket.LocalEndPoint : null; } }
+        private bool Connected { get { return _tcpClient != null && _tcpClient.Client.Connected; } }
+        public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
+        public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : null; } }
 
         public Uri Uri { get { return _uri; } }
 
@@ -160,24 +154,24 @@ namespace Wombat.Network.WebSockets
         public IEnumerable<WebSocketExtensionOfferDescription> OfferedExtensions { get { return _configuration.OfferedExtensions; } }
         public IEnumerable<WebSocketSubProtocolRequestDescription> RequestedSubProtocols { get { return _configuration.RequestedSubProtocols; } }
 
-        public ConnectionState State
+        public WebSocketState State
         {
             get
             {
                 switch (_state)
                 {
                     case _none:
-                        return ConnectionState.None;
+                        return WebSocketState.None;
                     case _connecting:
-                        return ConnectionState.Connecting;
+                        return WebSocketState.Connecting;
                     case _connected:
-                        return ConnectionState.Connected;
+                        return WebSocketState.Open;
                     case _closing:
-                        return ConnectionState.Closing;
+                        return WebSocketState.Closing;
                     case _closed:
-                        return ConnectionState.Closed;
+                        return WebSocketState.Closed;
                     default:
-                        return ConnectionState.Closed;
+                        return WebSocketState.Closed;
                 }
             }
         }
@@ -190,16 +184,9 @@ namespace Wombat.Network.WebSockets
 
         #endregion
 
-
-        public  void UsgLogger(ILogger log)
-        {
-            _logger = log;
-        }
-
-
         #region Connect
 
-        public async Task ConnectAsync()
+        public async Task Connect()
         {
             int origin = Interlocked.Exchange(ref _state, _connecting);
             if (!(origin == _none || origin == _closed))
@@ -213,9 +200,9 @@ namespace Wombat.Network.WebSockets
                 Clean(); // forcefully clean all things
                 ResetKeepAlive();
 
-                _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                _tcpClient = new TcpClient(_remoteEndPoint.Address.AddressFamily);
 
-                var awaiter = _socket.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
+                var awaiter = _tcpClient.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
                 if (!awaiter.Wait(ConnectTimeout))
                 {
                     await InternalClose(false);
@@ -224,7 +211,7 @@ namespace Wombat.Network.WebSockets
                 }
 
                 ConfigureClient();
-                var negotiator = NegotiateStream(new NetworkStream(_socket, true));
+                var negotiator = NegotiateStream(_tcpClient.GetStream());
                 if (!negotiator.Wait(ConnectTimeout))
                 {
                     await InternalClose(false);
@@ -296,12 +283,12 @@ namespace Wombat.Network.WebSockets
 
         private void ConfigureClient()
         {
-            _socket.ReceiveBufferSize = _configuration.ReceiveBufferSize;
-            _socket.SendBufferSize = _configuration.SendBufferSize;
-            _socket.ReceiveTimeout = (int)_configuration.ReceiveTimeout.TotalMilliseconds;
-            _socket.SendTimeout = (int)_configuration.SendTimeout.TotalMilliseconds;
-            _socket.NoDelay = _configuration.NoDelay;
-            _socket.LingerState = _configuration.LingerState;
+            _tcpClient.ReceiveBufferSize = _configuration.ReceiveBufferSize;
+            _tcpClient.SendBufferSize = _configuration.SendBufferSize;
+            _tcpClient.ReceiveTimeout = (int)_configuration.ReceiveTimeout.TotalMilliseconds;
+            _tcpClient.SendTimeout = (int)_configuration.SendTimeout.TotalMilliseconds;
+            _tcpClient.NoDelay = _configuration.NoDelay;
+            _tcpClient.LingerState = _configuration.LingerState;
         }
 
         private async Task<Stream> NegotiateStream(Stream stream)
@@ -319,10 +306,10 @@ namespace Wombat.Network.WebSockets
                     if (sslPolicyErrors == SslPolicyErrors.None)
                         return true;
 
-                    if (_securityOptions.SslPolicyErrorsBypassed)
+                    if (_configuration.SslPolicyErrorsBypassed)
                         return true;
                     else
-                        _logger?.LogError("Error occurred when validating remote certificate: [{0}], [{1}].",
+                        _logger.LogError("Error occurred when validating remote certificate: [{0}], [{1}].",
                             this.RemoteEndPoint, sslPolicyErrors);
 
                     return false;
@@ -333,20 +320,20 @@ namespace Wombat.Network.WebSockets
                 false,
                 validateRemoteCertificate,
                 null,
-                _securityOptions.SslEncryptionPolicy);
+                _configuration.SslEncryptionPolicy);
 
-            if (_securityOptions.SslClientCertificates == null || _securityOptions.SslClientCertificates.Count == 0)
+            if (_configuration.SslClientCertificates == null || _configuration.SslClientCertificates.Count == 0)
             {
                 await sslStream.AuthenticateAsClientAsync( // No client certificates are used in the authentication. The certificate revocation list is not checked during authentication.
-                    _securityOptions.SslTargetHost); // The name of the server that will share this SslStream. The value specified for targetHost must match the name on the server's certificate.
+                    _configuration.SslTargetHost); // The name of the server that will share this SslStream. The value specified for targetHost must match the name on the server's certificate.
             }
             else
             {
                 await sslStream.AuthenticateAsClientAsync(
-                    _securityOptions.SslTargetHost, // The name of the server that will share this SslStream. The value specified for targetHost must match the name on the server's certificate.
-                    _securityOptions.SslClientCertificates, // The X509CertificateCollection that contains client certificates.
-                    _securityOptions.SslEnabledProtocols, // The SslProtocols value that represents the protocol used for authentication.
-                    _securityOptions.SslCheckCertificateRevocation); // A Boolean value that specifies whether the certificate revocation list is checked during authentication.
+                    _configuration.SslTargetHost, // The name of the server that will share this SslStream. The value specified for targetHost must match the name on the server's certificate.
+                    _configuration.SslClientCertificates, // The X509CertificateCollection that contains client certificates.
+                    _configuration.SslEnabledProtocols, // The SslProtocols value that represents the protocol used for authentication.
+                    _configuration.SslCheckCertificateRevocation); // A Boolean value that specifies whether the certificate revocation list is checked during authentication.
             }
 
             // When authentication succeeds, you must check the IsEncrypted and IsSigned properties 
@@ -420,6 +407,11 @@ namespace Wombat.Network.WebSockets
                 _logger?.LogError(ex.Message, ex);
                 handshakeResult = false;
             }
+            catch (Exception)
+            {
+                handshakeResult = false;
+                throw;
+            }
 
             return handshakeResult;
         }
@@ -445,7 +437,7 @@ namespace Wombat.Network.WebSockets
                 int payloadCount;
                 int consumedLength = 0;
 
-                while (State == ConnectionState.Connected || State == ConnectionState.Closing)
+                while (State == WebSocketState.Open || State == WebSocketState.Closing)
                 {
                     int receiveCount = await _stream.ReadAsync(
                         _receiveBuffer.Array,
@@ -702,12 +694,12 @@ namespace Wombat.Network.WebSockets
 #if DEBUG
             _logger?.LogDebug("Receive server side ping frame [{0}].", ping);
 #endif
-            if (State == ConnectionState.Connected)
+            if (State == WebSocketState.Open)
             {
                 // A Pong frame sent in response to a Ping frame must have identical
                 // "Application data" as found in the message body of the Ping frame being replied to.
                 var pong = new PongFrame(ping).ToArray(_frameBuilder);
-                await SendFrameAsync(pong);
+                await SendFrame(pong);
 #if DEBUG
                 _logger?.LogDebug("Send client side pong frame [{0}].", ping);
 #endif
@@ -747,7 +739,7 @@ namespace Wombat.Network.WebSockets
 
         public async Task Close(WebSocketCloseCode closeCode, string closeReason)
         {
-            if (State == ConnectionState.Closed || State == ConnectionState.None)
+            if (State == WebSocketState.Closed || State == WebSocketState.None)
                 return;
 
             var priorState = Interlocked.Exchange(ref _state, _closing);
@@ -823,9 +815,9 @@ namespace Wombat.Network.WebSockets
             // is to call socket.Shutdown(SocketShutdown.Send) and give the remote party some time to close 
             // their send channel. This ensures that you receive any pending data instead of slamming the 
             // connection shut. ObjectDisposedException should never be part of the normal application flow.
-            if (_socket != null && _socket.Connected)
+            if (_tcpClient != null && _tcpClient.Connected)
             {
-                _socket.Shutdown(SocketShutdown.Send);
+                _tcpClient.Client.Shutdown(SocketShutdown.Send);
             }
         }
 
@@ -870,9 +862,9 @@ namespace Wombat.Network.WebSockets
                 catch { }
                 try
                 {
-                    if (_socket != null)
+                    if (_tcpClient != null)
                     {
-                        _socket.Dispose();
+                        _tcpClient.Dispose();
                     }
                 }
                 catch { }
@@ -884,7 +876,7 @@ namespace Wombat.Network.WebSockets
                 _keepAliveTimeoutTimer = null;
                 _closingTimeoutTimer = null;
                 _stream = null;
-                _socket = null;
+                _tcpClient = null;
             }
 
             if (_receiveBuffer != default(ArraySegment<byte>))
@@ -983,54 +975,10 @@ namespace Wombat.Network.WebSockets
         #endregion
 
         #region Send
-        public void SendText(string text)
-        {
-            SendFrame(new TextFrame(text).ToArray(_frameBuilder));
-        }
-
-        public void SendBinary(byte[] data)
-        {
-            SendBinary(data, 0, data.Length);
-        }
-
-        public void SendBinary(byte[] data, int offset, int count)
-        {
-            SendFrame(new BinaryFrame(data, offset, count).ToArray(_frameBuilder));
-        }
-
-        public void SendBinary(ArraySegment<byte> segment)
-        {
-            SendFrame(new BinaryFrame(segment).ToArray(_frameBuilder));
-        }
-
-        private void SendFrame(byte[] frame)
-        {
-            if (frame == null)
-            {
-                throw new ArgumentNullException("frame");
-            }
-            if (State != ConnectionState.Connected)
-            {
-                throw new InvalidOperationException("This websocket client has not connected to server.");
-            }
-
-            try
-            {
-                _stream.Write(frame, 0, frame.Length);
-                _keepAliveTracker.OnDataSent();
-
-            }
-            catch (Exception ex)
-            {
-                HandleSendOperationException(ex).Wait();
-                throw;
-            }
-        }
-
 
         public async Task SendTextAsync(string text)
         {
-            await SendFrameAsync(new TextFrame(text).ToArray(_frameBuilder));
+            await SendFrame(new TextFrame(text).ToArray(_frameBuilder));
         }
 
         public async Task SendBinaryAsync(byte[] data)
@@ -1040,12 +988,12 @@ namespace Wombat.Network.WebSockets
 
         public async Task SendBinaryAsync(byte[] data, int offset, int count)
         {
-            await SendFrameAsync(new BinaryFrame(data, offset, count).ToArray(_frameBuilder));
+            await SendFrame(new BinaryFrame(data, offset, count).ToArray(_frameBuilder));
         }
 
         public async Task SendBinaryAsync(ArraySegment<byte> segment)
         {
-            await SendFrameAsync(new BinaryFrame(segment).ToArray(_frameBuilder));
+            await SendFrame(new BinaryFrame(segment).ToArray(_frameBuilder));
         }
 
         public async Task SendStreamAsync(Stream stream)
@@ -1060,30 +1008,30 @@ namespace Wombat.Network.WebSockets
             readCount = await stream.ReadAsync(buffer, 0, fragmentLength);
             if (readCount == 0)
                 return;
-            await SendFrameAsync(new BinaryFragmentationFrame(OpCode.Binary, buffer, 0, readCount, isFin: false).ToArray(_frameBuilder));
+            await SendFrame(new BinaryFragmentationFrame(OpCode.Binary, buffer, 0, readCount, isFin: false).ToArray(_frameBuilder));
 
             while (true)
             {
                 readCount = await stream.ReadAsync(buffer, 0, fragmentLength);
                 if (readCount != 0)
                 {
-                    await SendFrameAsync(new BinaryFragmentationFrame(OpCode.Continuation, buffer, 0, readCount, isFin: false).ToArray(_frameBuilder));
+                    await SendFrame(new BinaryFragmentationFrame(OpCode.Continuation, buffer, 0, readCount, isFin: false).ToArray(_frameBuilder));
                 }
                 else
                 {
-                    await SendFrameAsync(new BinaryFragmentationFrame(OpCode.Continuation, buffer, 0, 0, isFin: true).ToArray(_frameBuilder));
+                    await SendFrame(new BinaryFragmentationFrame(OpCode.Continuation, buffer, 0, 0, isFin: true).ToArray(_frameBuilder));
                     break;
                 }
             }
         }
 
-        private async Task SendFrameAsync(byte[] frame)
+        private async Task SendFrame(byte[] frame)
         {
             if (frame == null)
             {
                 throw new ArgumentNullException("frame");
             }
-            if (State != ConnectionState.Connected)
+            if (State != WebSocketState.Open)
             {
                 throw new InvalidOperationException("This websocket client has not connected to server.");
             }
@@ -1125,13 +1073,13 @@ namespace Wombat.Network.WebSockets
             {
                 try
                 {
-                    if (State != ConnectionState.Connected)
+                    if (State != WebSocketState.Open)
                         return;
 
                     if (_keepAliveTracker.ShouldSendKeepAlive())
                     {
                         var keepAliveFrame = new PingFrame().ToArray(_frameBuilder);
-                        await SendFrameAsync(keepAliveFrame);
+                        await SendFrame(keepAliveFrame);
                         StartKeepAliveTimeoutTimer();
 #if DEBUG
                         _logger?.LogDebug("Send client side ping frame [{0}].", string.Empty);

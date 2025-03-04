@@ -3,17 +3,17 @@ using System.Threading.Tasks;
 
 namespace Wombat.Network.Sockets
 {
-    internal class DefaultTcpServerSockeEventDispatcher : ITcpSocketServerEventDispatcher
+    internal class DefaultTcpSocketServerEventDispatcher : ITcpSocketServerEventDispatcher
     {
         private Func<TcpSocketSession, byte[], int, int, Task> _onSessionDataReceived;
         private Func<TcpSocketSession, Task> _onSessionStarted;
         private Func<TcpSocketSession, Task> _onSessionClosed;
 
-        public DefaultTcpServerSockeEventDispatcher()
+        public DefaultTcpSocketServerEventDispatcher()
         {
         }
 
-        public DefaultTcpServerSockeEventDispatcher(
+        public DefaultTcpSocketServerEventDispatcher(
             Func<TcpSocketSession, byte[], int, int, Task> onSessionDataReceived,
             Func<TcpSocketSession, Task> onSessionStarted,
             Func<TcpSocketSession, Task> onSessionClosed)

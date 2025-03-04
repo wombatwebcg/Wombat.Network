@@ -8,14 +8,17 @@ using System.Threading;
 using System.Threading.Tasks;
 using Wombat.Network;
 using Microsoft.Extensions.Logging;
+using System.Buffers;
 
 namespace Wombat.Network.Sockets
 {
-    public class TcpSocketClient
+    public class TcpSocketClientBase : IDisposable
     {
+        private static ArrayPool<byte> _byteArrayPool = ArrayPool<byte>.Shared;
+
         #region Fields
 
-        private  ILogger _logger;
+        private ILogger _logger;
         private TcpClient _tcpClient;
         private readonly ITcpSocketClientEventDispatcher _dispatcher;
         private readonly TcpSocketClientConfiguration _configuration;
@@ -26,6 +29,7 @@ namespace Wombat.Network.Sockets
         private int _receiveBufferOffset = 0;
 
         private int _state;
+        private bool disposedValue;
         private const int _none = 0;
         private const int _connecting = 1;
         private const int _connected = 2;
@@ -35,36 +39,33 @@ namespace Wombat.Network.Sockets
 
         #region Constructors
 
-        public TcpSocketClient(IPAddress remoteAddress, int remotePort, IPAddress localAddress, int localPort, ITcpSocketClientEventDispatcher dispatcher, TcpSocketClientConfiguration configuration = null)
-            : this(new IPEndPoint(remoteAddress, remotePort), new IPEndPoint(localAddress, localPort), dispatcher, configuration)
+        public TcpSocketClientBase(IPAddress remoteAddress, int remotePort, IPAddress localAddress, int localPort, TcpSocketClientConfiguration configuration = null)
+            : this(new IPEndPoint(remoteAddress, remotePort), new IPEndPoint(localAddress, localPort),configuration)
         {
         }
 
-        public TcpSocketClient(IPAddress remoteAddress, int remotePort, IPEndPoint localEP, ITcpSocketClientEventDispatcher dispatcher, TcpSocketClientConfiguration configuration = null)
-            : this(new IPEndPoint(remoteAddress, remotePort), localEP, dispatcher, configuration)
+        public TcpSocketClientBase(IPAddress remoteAddress, int remotePort, IPEndPoint localEP, TcpSocketClientConfiguration configuration = null)
+            : this(new IPEndPoint(remoteAddress, remotePort), localEP, configuration)
         {
         }
 
-        public TcpSocketClient(IPAddress remoteAddress, int remotePort, ITcpSocketClientEventDispatcher dispatcher, TcpSocketClientConfiguration configuration = null)
-            : this(new IPEndPoint(remoteAddress, remotePort), dispatcher, configuration)
+        public TcpSocketClientBase(IPAddress remoteAddress, int remotePort,  TcpSocketClientConfiguration configuration = null)
+            : this(new IPEndPoint(remoteAddress, remotePort),configuration)
         {
         }
 
-        public TcpSocketClient(IPEndPoint remoteEP, ITcpSocketClientEventDispatcher dispatcher, TcpSocketClientConfiguration configuration = null)
-            : this(remoteEP, null, dispatcher, configuration)
+        public TcpSocketClientBase(IPEndPoint remoteEP,  TcpSocketClientConfiguration configuration = null)
+            : this(remoteEP, null,configuration)
         {
         }
 
-        public TcpSocketClient(IPEndPoint remoteEP, IPEndPoint localEP, ITcpSocketClientEventDispatcher dispatcher, TcpSocketClientConfiguration configuration = null)
+        public TcpSocketClientBase(IPEndPoint remoteEP, IPEndPoint localEP, TcpSocketClientConfiguration configuration = null)
         {
             if (remoteEP == null)
                 throw new ArgumentNullException("remoteEP");
-            if (dispatcher == null)
-                throw new ArgumentNullException("dispatcher");
 
             _remoteEndPoint = remoteEP;
             _localEndPoint = localEP;
-            _dispatcher = dispatcher;
             _configuration = configuration ?? new TcpSocketClientConfiguration();
 
             if (_configuration.BufferManager == null)
@@ -73,56 +74,16 @@ namespace Wombat.Network.Sockets
                 throw new InvalidProgramException("The frame handler in configuration cannot be null.");
         }
 
-        public TcpSocketClient(IPAddress remoteAddress, int remotePort, IPAddress localAddress, int localPort,
-            Func<TcpSocketClient, byte[], int, int, Task> onServerDataReceived = null,
-            Func<TcpSocketClient, Task> onServerConnected = null,
-            Func<TcpSocketClient, Task> onServerDisconnected = null,
-            TcpSocketClientConfiguration configuration = null)
-            : this(new IPEndPoint(remoteAddress, remotePort), new IPEndPoint(localAddress, localPort),
-                  onServerDataReceived, onServerConnected, onServerDisconnected, configuration)
-        {
-        }
 
-        public TcpSocketClient(IPAddress remoteAddress, int remotePort, IPEndPoint localEP,
-            Func<TcpSocketClient, byte[], int, int, Task> onServerDataReceived = null,
-            Func<TcpSocketClient, Task> onServerConnected = null,
-            Func<TcpSocketClient, Task> onServerDisconnected = null,
-            TcpSocketClientConfiguration configuration = null)
-            : this(new IPEndPoint(remoteAddress, remotePort), localEP,
-                  onServerDataReceived, onServerConnected, onServerDisconnected, configuration)
-        {
-        }
+        
 
-        public TcpSocketClient(IPAddress remoteAddress, int remotePort,
-            Func<TcpSocketClient, byte[], int, int, Task> onServerDataReceived = null,
-            Func<TcpSocketClient, Task> onServerConnected = null,
-            Func<TcpSocketClient, Task> onServerDisconnected = null,
-            TcpSocketClientConfiguration configuration = null)
-            : this(new IPEndPoint(remoteAddress, remotePort),
-                  onServerDataReceived, onServerConnected, onServerDisconnected, configuration)
-        {
-        }
 
-        public TcpSocketClient(IPEndPoint remoteEP,
-            Func<TcpSocketClient, byte[], int, int, Task> onServerDataReceived = null,
-            Func<TcpSocketClient, Task> onServerConnected = null,
-            Func<TcpSocketClient, Task> onServerDisconnected = null,
-            TcpSocketClientConfiguration configuration = null)
-            : this(remoteEP, null,
-                  onServerDataReceived, onServerConnected, onServerDisconnected, configuration)
-        {
-        }
 
-        public TcpSocketClient(IPEndPoint remoteEP, IPEndPoint localEP,
-            Func<TcpSocketClient, byte[], int, int, Task> onServerDataReceived = null,
-            Func<TcpSocketClient, Task> onServerConnected = null,
-            Func<TcpSocketClient, Task> onServerDisconnected = null,
-            TcpSocketClientConfiguration configuration = null)
-            : this(remoteEP, localEP,
-                 new DefaultTcpSocketClientEventDispatcher(onServerDataReceived, onServerConnected, onServerDisconnected),
-                 configuration)
-        {
-        }
+
+
+
+
+
 
         #endregion
 
@@ -214,29 +175,7 @@ namespace Wombat.Network.Sockets
                     this.RemoteEndPoint,
                     _dispatcher.GetType().Name,
                     DateTime.UtcNow.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff"));
-                bool isErrorOccurredInUserSide = false;
-                try
-                {
-                    await _dispatcher.OnServerConnected(this);
-                }
-                catch (Exception ex) // catch all exceptions from out-side
-                {
-                    isErrorOccurredInUserSide = true;
-                    await HandleUserSideError(ex);
-                }
 
-                if (!isErrorOccurredInUserSide)
-                {
-                    Task.Run(async () =>
-                    {
-                        await Process();
-                    })
-                    .Forget();
-                }
-                else
-                {
-                    await Close(true); // user side handle tcp connection error occurred
-                }
             }
             catch (Exception ex) // catch exceptions then log then re-throw
             {
@@ -246,80 +185,6 @@ namespace Wombat.Network.Sockets
             }
         }
 
-        private async Task Process()
-        {
-            try
-            {
-                int frameLength;
-                byte[] payload;
-                int payloadOffset;
-                int payloadCount;
-                int consumedLength = 0;
-
-                while (State == TcpSocketConnectionState.Connected)
-                {
-                    int receiveCount = await _stream.ReadAsync( _receiveBuffer.Array,_receiveBuffer.Offset + _receiveBufferOffset,_receiveBuffer.Count - _receiveBufferOffset);
-
-                    if (receiveCount == 0)
-                        break;
-
-                    SegmentBufferDeflector.ReplaceBuffer(_configuration.BufferManager, ref _receiveBuffer, ref _receiveBufferOffset, receiveCount);
-                    consumedLength = 0;
-                    while (true)
-                    {
-                        frameLength = 0;
-                        payload = null;
-                        payloadOffset = 0;
-                        payloadCount = 0;
-
-                        if (_configuration.FrameBuilder.Decoder.TryDecodeFrame(
-                            _receiveBuffer.Array,
-                            _receiveBuffer.Offset + consumedLength,
-                            _receiveBufferOffset - consumedLength,
-                            out frameLength, out payload, out payloadOffset, out payloadCount))
-                        {
-                            try
-                            {
-                                await _dispatcher.OnServerDataReceived(this, payload, payloadOffset, payloadCount);
-                            }
-                            catch (Exception ex) // 捕获所有外部异常
-                            {
-                                await HandleUserSideError(ex);
-                            }
-                            finally
-                            {
-                                consumedLength += frameLength;
-                            }
-                        }
-                        else
-                        {
-                            break;
-                        }
-                    }
-
-
-
-                    if (_receiveBuffer != null && _receiveBuffer.Array != null)
-                    {
-                        SegmentBufferDeflector.ShiftBuffer(_configuration.BufferManager, consumedLength, ref _receiveBuffer, ref _receiveBufferOffset);
-                    }
-
-                    // 设置超时取消令牌
-                }
-            }
-            catch (ObjectDisposedException)
-            {
-                // Graceful exit
-            }
-            catch (Exception ex)
-            {
-                await HandleReceiveOperationException(ex);
-            }
-            finally
-            {
-                await Close(true); // 关闭连接
-            }
-        }
 
         private void SetSocketOptions()
         {
@@ -440,14 +305,7 @@ namespace Wombat.Network.Sockets
                     this.RemoteEndPoint,
                     _dispatcher.GetType().Name,
                     DateTime.UtcNow.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff"));
-                try
-                {
-                    await _dispatcher.OnServerDisconnected(this);
-                }
-                catch (Exception ex) // catch all exceptions from out-side
-                {
-                    await HandleUserSideError(ex);
-                }
+
             }
 
             Clean();
@@ -462,6 +320,9 @@ namespace Wombat.Network.Sockets
             if (_tcpClient != null && _tcpClient.Connected)
             {
                 _tcpClient.Client.Shutdown(SocketShutdown.Send);
+
+                _tcpClient.Client.Shutdown(SocketShutdown.Receive);
+
             }
         }
 
@@ -555,11 +416,7 @@ namespace Wombat.Network.Sockets
             return false;
         }
 
-        private async Task HandleUserSideError(Exception ex)
-        {
-            _logger?.LogError(string.Format("Client [{0}] error occurred in user side [{1}].", this, ex.Message), ex);
-            await Task.CompletedTask;
-        }
+
 
         #endregion
 
@@ -572,7 +429,6 @@ namespace Wombat.Network.Sockets
 
         public async Task SendAsync(byte[] data, int offset, int count, CancellationToken cancellationToken)
         {
-            BufferValidator.ValidateBuffer(data, offset, count, "data");
 
             if (State != TcpSocketConnectionState.Connected)
             {
@@ -581,12 +437,8 @@ namespace Wombat.Network.Sockets
 
             try
             {
-                byte[] frameBuffer;
-                int frameBufferOffset;
-                int frameBufferLength;
-                _configuration.FrameBuilder.Encoder.EncodeFrame(data, offset, count, out frameBuffer, out frameBufferOffset, out frameBufferLength);
 
-                await _stream.WriteAsync(frameBuffer, frameBufferOffset, frameBufferLength,cancellationToken);
+                await _stream.WriteAsync(data, offset, count, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -595,5 +447,66 @@ namespace Wombat.Network.Sockets
         }
 
         #endregion
+
+        #region Recevice
+
+        public async Task<int> ReceiveAsync(byte[] data, CancellationToken cancellationToken)
+        {
+            return await ReceiveAsync(data, 0, data.Length, cancellationToken);
+        }
+
+        public async Task<int> ReceiveAsync(byte[] data, int offset, int count, CancellationToken cancellationToken)
+        {
+
+            if (State != TcpSocketConnectionState.Connected)
+            {
+                throw new InvalidOperationException("This client has not connected to server.");
+            }
+
+            try
+            {
+                return await _stream.ReadAsync(data, offset, count,cancellationToken);
+
+
+            }
+            catch (Exception ex)
+            {
+                await HandleReceiveOperationException(ex);
+                return 0;
+            }
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposedValue)
+            {
+                if (disposing)
+                {
+                    // TODO: 释放托管状态(托管对象)
+                    _tcpClient.Dispose();
+                }
+
+                // TODO: 释放未托管的资源(未托管的对象)并重写终结器
+                // TODO: 将大型字段设置为 null
+                disposedValue = true;
+            }
+        }
+
+        // // TODO: 仅当“Dispose(bool disposing)”拥有用于释放未托管资源的代码时才替代终结器
+        // ~TcpSocketClientBase()
+        // {
+        //     // 不要更改此代码。请将清理代码放入“Dispose(bool disposing)”方法中
+        //     Dispose(disposing: false);
+        // }
+
+        public void Dispose()
+        {
+            // 不要更改此代码。请将清理代码放入“Dispose(bool disposing)”方法中
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
+        }
+
+        #endregion
+
     }
 }

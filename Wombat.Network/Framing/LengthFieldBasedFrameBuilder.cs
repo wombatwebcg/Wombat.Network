@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Wombat.Network.Sockets
+namespace Wombat.Network
 {
     public enum LengthField
     {

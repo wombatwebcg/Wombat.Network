@@ -4,14 +4,6 @@ namespace Wombat.Network
 {
     public class SegmentBufferDeflector
     {
-        /// <summary>
-        /// 附加缓冲区
-        /// </summary>
-        /// <param name="bufferManager"></param>
-        /// <param name="receiveBuffer"></param>
-        /// <param name="receiveCount"></param>
-        /// <param name="sessionBuffer"></param>
-        /// <param name="sessionBufferCount"></param>
         public static void AppendBuffer(
             ISegmentBufferManager bufferManager,
             ref ArraySegment<byte> receiveBuffer,
@@ -39,13 +31,6 @@ namespace Wombat.Network
             sessionBufferCount = sessionBufferCount + receiveCount;
         }
 
-        /// <summary>
-        /// 移位缓冲区
-        /// </summary>
-        /// <param name="bufferManager"></param>
-        /// <param name="shiftStart"></param>
-        /// <param name="sessionBuffer"></param>
-        /// <param name="sessionBufferCount"></param>
         public static void ShiftBuffer(
             ISegmentBufferManager bufferManager,
             int shiftStart,
@@ -74,13 +59,6 @@ namespace Wombat.Network
             }
         }
 
-        /// <summary>
-        /// 替换缓冲区
-        /// </summary>
-        /// <param name="bufferManager"></param>
-        /// <param name="receiveBuffer"></param>
-        /// <param name="receiveBufferOffset"></param>
-        /// <param name="receiveCount"></param>
         public static void ReplaceBuffer(
             ISegmentBufferManager bufferManager,
             ref ArraySegment<byte> receiveBuffer,
