@@ -21,7 +21,7 @@ namespace Wombat.Network.WebSockets
     {
         #region Fields
 
-        private static readonly ILogger _logger ;
+        private ILogger _logger ;
         private TcpClient _tcpClient;
         private readonly IWebSocketClientMessageDispatcher _dispatcher;
         private readonly WebSocketClientConfiguration _configuration;
@@ -184,9 +184,16 @@ namespace Wombat.Network.WebSockets
 
         #endregion
 
+        #region Logger
+        public void UseLogger(ILogger logger)
+        {
+            _logger = logger;
+        }
+
+        #endregion
         #region Connect
 
-        public async Task Connect()
+        public async Task ConnectAsync()
         {
             int origin = Interlocked.Exchange(ref _state, _connecting);
             if (!(origin == _none || origin == _closed))

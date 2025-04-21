@@ -55,7 +55,7 @@ namespace Wombat.WebSockets.TestWebSocketClient
                     OnServerConnected,
                     OnServerDisconnected,
                     config);
-                _client.UsgLogger(logger);
+                _client.UseLogger(logger);
                 try
                 {
                     await _client.ConnectAsync();

@@ -92,7 +92,16 @@ namespace Wombat.Network.Sockets
 
         public TcpSocketClientConfiguration TcpSocketClientConfiguration { get { return _configuration; } }
 
-        public bool Connected { get { return _tcpClient != null && _tcpClient.Client.Connected; } }
+        public bool Connected 
+        {
+            get
+            {
+                if (_tcpClient == null) return false;
+                if(_tcpClient.Client == null) return false;
+                return _tcpClient.Client.Connected;
+            }
+        
+        }
         public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
         public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : _localEndPoint; } }
 
@@ -126,7 +135,7 @@ namespace Wombat.Network.Sockets
 
         #region Connect
 
-        public async Task Connect()
+        public async Task ConnectAsync()
         {
             int origin = Interlocked.Exchange(ref _state, _connecting);
             if (!(origin == _none || origin == _closed))
