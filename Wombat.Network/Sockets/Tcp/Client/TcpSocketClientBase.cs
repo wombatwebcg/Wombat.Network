@@ -92,16 +92,24 @@ namespace Wombat.Network.Sockets
 
         public TcpSocketClientConfiguration TcpSocketClientConfiguration { get { return _configuration; } }
 
-        public bool Connected 
+        public bool Connected
         {
             get
             {
-                if (_tcpClient == null) return false;
-                if(_tcpClient.Client == null) return false;
-                return _tcpClient.Client.Connected;
+                if (_tcpClient == null || _tcpClient.Client == null)
+                    return false;
+
+                try
+                {
+                    return !(_tcpClient.Client.Poll(1, SelectMode.SelectRead) && _tcpClient.Client.Available == 0);
+                }
+                catch (SocketException)
+                {
+                    return false;
+                }
             }
-        
         }
+
         public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
         public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : _localEndPoint; } }
 
