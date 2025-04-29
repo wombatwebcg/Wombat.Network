@@ -131,7 +131,14 @@ namespace Wombat.Network.Sockets
 
         public TcpSocketClientConfiguration TcpSocketClientConfiguration { get { return _configuration; } }
 
-        public bool Connected { get { return _tcpClient != null && _tcpClient.Client.Connected; } }
+        public bool Connected
+        {
+            get
+            {
+                return _tcpClient != null && _tcpClient.Connected;
+
+            }
+        }
         public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
         public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : _localEndPoint; } }
 

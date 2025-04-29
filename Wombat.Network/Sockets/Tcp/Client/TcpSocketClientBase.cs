@@ -96,17 +96,8 @@ namespace Wombat.Network.Sockets
         {
             get
             {
-                if (_tcpClient == null || _tcpClient.Client == null)
-                    return false;
-
-                try
-                {
-                    return !(_tcpClient.Client.Poll(1, SelectMode.SelectRead) && _tcpClient.Client.Available == 0);
-                }
-                catch (SocketException)
-                {
-                    return false;
-                }
+                return _tcpClient != null && _tcpClient.Connected; 
+                
             }
         }
 
@@ -161,12 +152,17 @@ namespace Wombat.Network.Sockets
                     new TcpClient(_remoteEndPoint.Address.AddressFamily);
                 SetSocketOptions();
 
-                var awaiter = _tcpClient.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
-                if (!awaiter.Wait(TcpSocketClientConfiguration.ConnectTimeout))
+                var connectTask = _tcpClient.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
+                if (!connectTask.Wait(TcpSocketClientConfiguration.ConnectTimeout))
                 {
-                    await Close(false); // connect timeout
-                    throw new TimeoutException(string.Format(
-                        "Connect to [{0}] timeout [{1}].", _remoteEndPoint, TcpSocketClientConfiguration.ConnectTimeout));
+                    await Close(false);
+                    throw new TimeoutException($"Connect to [{_remoteEndPoint}] timeout [{TcpSocketClientConfiguration.ConnectTimeout}].");
+                }
+
+                if (!_tcpClient.Connected)
+                {
+                    await Close(false);
+                    throw new SocketException((int)SocketError.NotConnected);
                 }
 
                 var negotiator = NegotiateStream(_tcpClient.GetStream());
