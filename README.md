@@ -283,14 +283,35 @@ var config = new TcpSocketClientConfiguration
 
 或直接使用`PipelineSocketConnection`类处理高性能Socket通信。
 
-### 2. 选择合适的帧格式
+### 2. 框架兼容性注意事项
+
+在不同的.NET框架版本中，Socket API的使用方式存在差异：
+
+- **.NET Standard 2.0**: 使用`SocketAsyncEventArgs`进行异步操作，不支持`Socket.ReceiveAsync(Memory<byte>, SocketFlags)`和`Socket.SendAsync(ReadOnlyMemory<byte>, SocketFlags)`。
+- **.NET Core 3.0+/.NET 5+**: 支持基于`Memory<T>`的异步Socket API，可以直接使用`await socket.ReceiveAsync(memory, SocketFlags.None)`。
+
+如果您的项目面向.NET Standard 2.0，`PipelineSocketConnection`已经内部处理了这些差异，确保跨平台兼容性。对于自定义Socket操作，请使用兼容的API。
+
+```csharp
+// .NET Standard 2.0 兼容写法
+var args = new SocketAsyncEventArgs();
+args.SetBuffer(buffer, 0, buffer.Length);
+args.Completed += OnOperationCompleted;
+bool pending = socket.ReceiveAsync(args);
+if (!pending) OnOperationCompleted(socket, args);
+
+// .NET Core 3.0+/.NET 5+ 写法 (不兼容 .NET Standard 2.0)
+int bytesReceived = await socket.ReceiveAsync(memory, SocketFlags.None);
+```
+
+### 3. 选择合适的帧格式
 
 为您的应用场景选择最合适的帧格式：
 - 对于二进制协议，使用`LengthFieldBasedFrameBuilder`
 - 对于文本协议，使用`LineBasedFrameBuilder`
 - 对于大量小消息，使用`RawBufferFrameBuilder`
 
-### 3. 配置适当的缓冲区大小
+### 4. 配置适当的缓冲区大小
 
 根据您的消息大小设置合适的缓冲区参数：
 
@@ -308,7 +329,7 @@ var config = new TcpSocketClientConfiguration
 };
 ```
 
-### 4. 优化连接参数
+### 5. 优化连接参数
 
 调整连接和超时参数以获得更好的性能：
 
@@ -323,7 +344,7 @@ var config = new TcpSocketClientConfiguration
 };
 ```
 
-### 5. 减少内存分配
+### 6. 减少内存分配
 
 - 重用缓冲区而不是每次分配新内存
 - 使用`ArrayPool<byte>`或缓冲区池管理内存

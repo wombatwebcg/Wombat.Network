@@ -49,7 +49,51 @@ Wombat.Network是一个高性能、功能丰富的.NET网络通信库，提供�
 
 6. **通用组件**
    - `CommunicationResult<T>` - 通信结果类，支持同步和异步等待
-   - `CommunicationResultStatus` - 通信结果状态枚举 
+   - `CommunicationResultStatus` - 通信结果状态枚举
+
+### 框架兼容性
+
+Wombat.Network 库目标框架为 .NET Standard 2.0，确保了与各种 .NET 实现的广泛兼容性。在使用该库时，需要注意以下几点：
+
+1. **Socket API 差异**
+   
+   在 .NET Standard 2.0 中，Socket API 不支持直接使用 Memory<T> 和 ReadOnlyMemory<T> 作为参数的异步方法：
+   
+   - 不支持: `Socket.ReceiveAsync(Memory<byte>, SocketFlags, CancellationToken)`
+   - 不支持: `Socket.SendAsync(ReadOnlyMemory<byte>, SocketFlags, CancellationToken)`
+   
+   而是使用基于 SocketAsyncEventArgs 的模式：
+   
+   ```csharp
+   var args = new SocketAsyncEventArgs();
+   args.SetBuffer(buffer, 0, buffer.Length);
+   args.Completed += OnOperationCompleted;
+   bool pending = socket.ReceiveAsync(args);
+   ```
+   
+   Wombat.Network 库中的 `PipelineSocketConnection` 类内部已经处理了这些兼容性问题，可以安全地在所有支持的框架中使用。
+
+2. **版本升级注意事项**
+   
+   如果您的项目迁移到 .NET Core 3.0+ 或 .NET 5+，可以考虑使用新的 Socket API，但需要确保与现有代码的兼容性。
+
+3. **跨平台考虑**
+   
+   在不同操作系统上，某些 Socket 操作的行为可能略有不同。Wombat.Network 已尽可能确保跨平台一致性，但在开发时仍需考虑潜在的平台特定问题。
+
+**特别说明：框架兼容性**
+
+PipelineSocketConnection类针对.NET Standard 2.0进行了特别优化。在.NET Standard 2.0中，Socket API不支持直接使用Memory<byte>进行异步操作的方法签名，如：
+
+```csharp
+// 这些方法在.NET Standard 2.0中不可用
+await socket.ReceiveAsync(memory, SocketFlags.None);
+await socket.SendAsync(segment, SocketFlags.None);
+```
+
+而是使用基于SocketAsyncEventArgs的模式。PipelineSocketConnection内部实现了这种转换，使您可以使用现代的Pipelines API，而无需关心底层Socket API的差异。如果您迁移到更新的.NET版本，代码将继续工作，无需修改。
+
+对于自定义Socket操作，请注意这种API差异，并根据目标框架选择合适的实现方式。
 
 ## TCP Socket客户端/服务器接口
 
@@ -1439,3 +1483,136 @@ namespace WombatNetworkDemo
         }
     }
 }
+```
+
+## Pipelines高性能连接接口
+
+Wombat.Network提供了基于System.IO.Pipelines的高性能网络连接组件，实现了高效的数据传输和处理能力。
+
+### PipelineSocketConnection
+
+`PipelineSocketConnection`是一个基于System.IO.Pipelines的高性能Socket连接实现，提供了对Socket的异步操作和高效数据处理的封装。
+
+#### 构造函数
+
+```csharp
+/// <summary>
+/// 创建新的PipelineSocketConnection
+/// </summary>
+/// <param name="socket">底层Socket</param>
+/// <param name="logger">日志记录器</param>
+/// <param name="receiveOptions">接收管道选项</param>
+/// <param name="sendOptions">发送管道选项</param>
+/// <param name="maxConcurrentSends">最大并发发送数</param>
+public PipelineSocketConnection(
+    Socket socket, 
+    ILogger logger = null, 
+    PipeOptions receiveOptions = null, 
+    PipeOptions sendOptions = null, 
+    int maxConcurrentSends = 1)
+```
+
+#### 属性
+
+```csharp
+/// <summary>
+/// 远程端点
+/// </summary>
+public IPEndPoint RemoteEndPoint { get; }
+
+/// <summary>
+/// 本地端点
+/// </summary>
+public IPEndPoint LocalEndPoint { get; }
+
+/// <summary>
+/// 是否已连接
+/// </summary>
+public bool IsConnected { get; }
+
+/// <summary>
+/// 接收管道读取器
+/// </summary>
+public PipeReader Input { get; }
+
+/// <summary>
+/// 发送管道写入器
+/// </summary>
+public PipeWriter Output { get; }
+```
+
+#### 方法
+
+```csharp
+/// <summary>
+/// 启动管道处理
+/// </summary>
+public void Start()
+
+/// <summary>
+/// 停止管道处理
+/// </summary>
+/// <returns>异步任务</returns>
+public async Task StopAsync()
+
+/// <summary>
+/// 直接发送数据，绕过管道
+/// </summary>
+/// <param name="data">要发送的数据</param>
+/// <param name="cancellationToken">取消令牌</param>
+/// <returns>发送的字节数</returns>
+public async Task<int> SendDataAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
+
+/// <summary>
+/// 释放资源
+/// </summary>
+public void Dispose()
+```
+
+#### 实现特性
+
+1. **高性能Socket操作**:
+   - 使用System.IO.Pipelines进行高效数据处理
+   - 使用SocketAsyncEventArgs进行异步Socket操作
+   - 支持并发发送控制
+   - 内置超时处理机制
+
+2. **.NET Standard 2.0 兼容性**:
+   - 内部处理.NET Standard 2.0中Socket API的限制
+   - 在不同版本的.NET中保持一致的API
+   - 自动处理Memory<byte>与byte[]之间的转换
+
+3. **资源管理**:
+   - 自动管理和释放Socket资源
+   - 安全地处理Socket的关闭和销毁
+   - 支持取消令牌以取消正在进行的操作
+
+#### 使用方式
+
+`PipelineSocketConnection`提供了两种主要的使用方式：
+
+1. **通过Input/Output属性使用管道API**:
+
+```csharp
+// 写入数据到管道
+byte[] data = Encoding.UTF8.GetBytes("Hello");
+await connection.Output.WriteAsync(data);
+
+// 从管道读取数据
+ReadResult result = await connection.Input.ReadAsync();
+foreach (var segment in result.Buffer)
+{
+    // 处理segment中的数据
+}
+connection.Input.AdvanceTo(result.Buffer.End);
+```
+
+2. **直接使用SendDataAsync方法**:
+
+```csharp
+// 发送数据，绕过管道
+byte[] data = Encoding.UTF8.GetBytes("Hello");
+await connection.SendDataAsync(data);
+```
+
+## 帧构建器和缓冲区接口
