@@ -17,8 +17,8 @@ namespace Wombat.Network.WebSockets
             BufferManager = new SegmentBufferManager(100, 8192, 1, true);
             ReceiveBufferSize = 8192;
             SendBufferSize = 8192;
-            ReceiveTimeout = TimeSpan.Zero;
-            SendTimeout = TimeSpan.Zero;
+            ReceiveTimeout = TimeSpan.FromSeconds(30);
+            SendTimeout = TimeSpan.FromSeconds(30);
             NoDelay = true;
             LingerState = new LingerOption(false, 0); // The socket will linger for x seconds after Socket.Close is called.
 
@@ -29,10 +29,10 @@ namespace Wombat.Network.WebSockets
             SslCheckCertificateRevocation = false;
             SslPolicyErrorsBypassed = false;
 
-            ConnectTimeout = TimeSpan.FromSeconds(10);
-            CloseTimeout = TimeSpan.FromSeconds(5);
-            KeepAliveInterval = TimeSpan.FromSeconds(30);
-            KeepAliveTimeout = TimeSpan.FromSeconds(5);
+            ConnectTimeout = TimeSpan.FromSeconds(30);
+            CloseTimeout = TimeSpan.FromSeconds(10);
+            KeepAliveInterval = TimeSpan.FromSeconds(60);
+            KeepAliveTimeout = TimeSpan.FromSeconds(10);
             ReasonableFragmentSize = 4096;
 
             EnabledExtensions = new Dictionary<string, IWebSocketExtensionNegotiator>()
@@ -46,6 +46,10 @@ namespace Wombat.Network.WebSockets
                 new WebSocketExtensionOfferDescription(PerMessageCompressionExtension.RegisteredToken),
             };
             RequestedSubProtocols = new List<WebSocketSubProtocolRequestDescription>();
+            
+            OperationTimeout = TimeSpan.FromSeconds(30);
+            EnablePipelineIo = true;
+            MaxConcurrentConnections = 100;
         }
 
         public ISegmentBufferManager BufferManager { get; set; }
@@ -74,5 +78,9 @@ namespace Wombat.Network.WebSockets
 
         public List<WebSocketExtensionOfferDescription> OfferedExtensions { get; set; }
         public List<WebSocketSubProtocolRequestDescription> RequestedSubProtocols { get; set; }
+        
+        public TimeSpan OperationTimeout { get; set; }
+        public bool EnablePipelineIo { get; set; }
+        public int MaxConcurrentConnections { get; set; }
     }
 }

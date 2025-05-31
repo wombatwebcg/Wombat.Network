@@ -30,6 +30,10 @@ namespace Wombat.Network.Sockets
         private const int _connecting = 1;
         private const int _connected = 2;
         private const int _closed = 5;
+        
+        // 新增字段，用于异步处理
+        private CancellationTokenSource _processCts;
+        private Task _processTask;
 
         #endregion
 
@@ -172,7 +176,7 @@ namespace Wombat.Network.Sockets
 
         #region Connect
 
-        public async Task Connect()
+        public async Task Connect(CancellationToken cancellationToken = default)
         {
             int origin = Interlocked.Exchange(ref _state, _connecting);
             if (!(origin == _none || origin == _closed))
@@ -183,29 +187,62 @@ namespace Wombat.Network.Sockets
 
             Clean(); // force to clean
 
+            CancellationTokenSource timeoutCts = null;
+            CancellationTokenSource linkedCts = null;
+            
             try
             {
+                timeoutCts = new CancellationTokenSource(_configuration.ConnectTimeout);
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+
                 _tcpClient = _localEndPoint != null ?
                     new TcpClient(_localEndPoint) :
                     new TcpClient(_remoteEndPoint.Address.AddressFamily);
                 SetSocketOptions();
 
-                var awaiter = _tcpClient.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
-                if (!awaiter.Wait(TcpSocketClientConfiguration.ConnectTimeout))
+                try
                 {
-                    await Close(false); // connect timeout
-                    throw new TimeoutException(string.Format(
-                        "Connect to [{0}] timeout [{1}].", _remoteEndPoint, TcpSocketClientConfiguration.ConnectTimeout));
+                    // 使用真正的异步操作替换阻塞等待
+                    var connectTask = _tcpClient.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
+                    
+                    // 添加超时
+                    if (await Task.WhenAny(connectTask, Task.Delay(_configuration.ConnectTimeout, cancellationToken)) != connectTask)
+                    {
+                        await Close(false); // connect timeout
+                        throw new TimeoutException(string.Format(
+                            "Connect to [{0}] timeout [{1}].", _remoteEndPoint, _configuration.ConnectTimeout));
+                    }
+                    
+                    // 确保连接任务已完成
+                    await connectTask;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    await Close(false); // operation canceled
+                    throw; // 重新抛出取消异常
                 }
 
-                var negotiator = NegotiateStream(_tcpClient.GetStream());
-                if (!negotiator.Wait(TcpSocketClientConfiguration.ConnectTimeout))
+                // 使用异步方式协商流
+                try
                 {
-                    await Close(false); // ssl negotiation timeout
-                    throw new TimeoutException(string.Format(
-                        "Negotiate SSL/TSL with remote [{0}] timeout [{1}].", _remoteEndPoint, TcpSocketClientConfiguration.ConnectTimeout));
+                    var negotiateTask = NegotiateStreamAsync(_tcpClient.GetStream(), cancellationToken);
+                    
+                    // 添加超时
+                    if (await Task.WhenAny(negotiateTask, Task.Delay(_configuration.ConnectTimeout, cancellationToken)) != negotiateTask)
+                    {
+                        await Close(false); // ssl negotiation timeout
+                        throw new TimeoutException(string.Format(
+                            "Negotiate SSL/TSL with remote [{0}] timeout [{1}].", _remoteEndPoint, _configuration.ConnectTimeout));
+                    }
+                    
+                    // 获取协商结果
+                    _stream = await negotiateTask;
                 }
-                _stream = negotiator.Result;
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    await Close(false); // operation canceled
+                    throw; // 重新抛出取消异常
+                }
 
                 if (_receiveBuffer == default(ArraySegment<byte>))
                     _receiveBuffer = _configuration.BufferManager.BorrowBuffer();
@@ -234,16 +271,19 @@ namespace Wombat.Network.Sockets
 
                 if (!isErrorOccurredInUserSide)
                 {
-                    Task.Run(async () =>
-                    {
-                        await Process();
-                    })
-                    .Forget();
+                    // 使用取消令牌启动处理任务
+                    _processCts = new CancellationTokenSource();
+                    _processTask = ProcessAsync(_processCts.Token);
                 }
                 else
                 {
                     await Close(true); // user side handle tcp connection error occurred
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await Close(false); // operation canceled
+                throw; // 重新抛出取消异常
             }
             catch (Exception ex) // catch exceptions then log then re-throw
             {
@@ -251,9 +291,14 @@ namespace Wombat.Network.Sockets
                 await Close(true); // handle tcp connection error occurred
                 throw;
             }
+            finally
+            {
+                timeoutCts?.Dispose();
+                linkedCts?.Dispose();
+            }
         }
-
-        private async Task Process()
+        
+        private async Task ProcessAsync(CancellationToken cancellationToken)
         {
             try
             {
@@ -263,60 +308,130 @@ namespace Wombat.Network.Sockets
                 int payloadCount;
                 int consumedLength = 0;
 
-                while (State == TcpSocketConnectionState.Connected)
+                while (State == TcpSocketConnectionState.Connected && !cancellationToken.IsCancellationRequested)
                 {
-                    int receiveCount = await _stream.ReadAsync( _receiveBuffer.Array,_receiveBuffer.Offset + _receiveBufferOffset,_receiveBuffer.Count - _receiveBufferOffset);
-
-                    if (receiveCount == 0)
-                        break;
-
-                    SegmentBufferDeflector.ReplaceBuffer(_configuration.BufferManager, ref _receiveBuffer, ref _receiveBufferOffset, receiveCount);
-                    consumedLength = 0;
-                    while (true)
+                    // 使用带超时的读取
+                    CancellationTokenSource timeoutCts = null;
+                    CancellationTokenSource linkedCts = null;
+                    
+                    try
                     {
-                        frameLength = 0;
-                        payload = null;
-                        payloadOffset = 0;
-                        payloadCount = 0;
-
-                        if (_configuration.FrameBuilder.Decoder.TryDecodeFrame(
+                        timeoutCts = new CancellationTokenSource(_configuration.ReceiveTimeout);
+                        linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+                        
+                        var receiveTask = _stream.ReadAsync(
                             _receiveBuffer.Array,
-                            _receiveBuffer.Offset + consumedLength,
-                            _receiveBufferOffset - consumedLength,
-                            out frameLength, out payload, out payloadOffset, out payloadCount))
+                            _receiveBuffer.Offset + _receiveBufferOffset,
+                            _receiveBuffer.Count - _receiveBufferOffset);
+                            
+                        // 添加超时
+                        if (await Task.WhenAny(receiveTask, Task.Delay(_configuration.ReceiveTimeout, linkedCts.Token)) != receiveTask)
                         {
-                            try
+                            if (!cancellationToken.IsCancellationRequested)
                             {
-                                await _dispatcher.OnServerDataReceived(this, payload, payloadOffset, payloadCount);
+                                // 读取超时，可以选择继续或关闭，这里选择继续
+                                _logger?.LogWarning("Read operation timed out after {0}ms, continuing", 
+                                    _configuration.ReceiveTimeout.TotalMilliseconds);
+                                continue;
                             }
-                            catch (Exception ex) // 捕获所有外部异常
+                            else
                             {
-                                await HandleUserSideError(ex);
-                            }
-                            finally
-                            {
-                                consumedLength += frameLength;
+                                // 外部请求取消
+                                break;
                             }
                         }
-                        else
-                        {
+                        
+                        // 获取接收结果
+                        int receiveCount = await receiveTask;
+                        
+                        if (receiveCount == 0)
                             break;
+
+                        SegmentBufferDeflector.ReplaceBuffer(_configuration.BufferManager, ref _receiveBuffer, ref _receiveBufferOffset, receiveCount);
+                        consumedLength = 0;
+                        
+                        // 处理收到的数据
+                        while (true)
+                        {
+                            frameLength = 0;
+                            payload = null;
+                            payloadOffset = 0;
+                            payloadCount = 0;
+
+                            if (_configuration.FrameBuilder.Decoder.TryDecodeFrame(
+                                _receiveBuffer.Array,
+                                _receiveBuffer.Offset + consumedLength,
+                                _receiveBufferOffset - consumedLength,
+                                out frameLength, out payload, out payloadOffset, out payloadCount))
+                            {
+                                try
+                                {
+                                    // 使用操作超时
+                                    using (var dispatchCts = new CancellationTokenSource(_configuration.OperationTimeout))
+                                    using (var dispatchLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(dispatchCts.Token, cancellationToken))
+                                    {
+                                        var dispatchTask = _dispatcher.OnServerDataReceived(this, payload, payloadOffset, payloadCount);
+                                        
+                                        // 添加超时
+                                        if (await Task.WhenAny(dispatchTask, Task.Delay(_configuration.OperationTimeout, dispatchLinkedCts.Token)) != dispatchTask)
+                                        {
+                                            if (!cancellationToken.IsCancellationRequested)
+                                            {
+                                                _logger?.LogWarning("Dispatch operation timed out after {0}ms", 
+                                                    _configuration.OperationTimeout.TotalMilliseconds);
+                                            }
+                                            else
+                                            {
+                                                // 外部请求取消
+                                                return;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // 确保调度任务已完成
+                                            await dispatchTask;
+                                        }
+                                    }
+                                }
+                                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                                {
+                                    // 外部请求取消，直接退出
+                                    return;
+                                }
+                                catch (Exception ex)
+                                {
+                                    await HandleUserSideError(ex);
+                                }
+                                finally
+                                {
+                                    consumedLength += frameLength;
+                                }
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+
+                        if (_receiveBuffer != null && _receiveBuffer.Array != null)
+                        {
+                            SegmentBufferDeflector.ShiftBuffer(_configuration.BufferManager, consumedLength, ref _receiveBuffer, ref _receiveBufferOffset);
                         }
                     }
-
-
-
-                    if (_receiveBuffer != null && _receiveBuffer.Array != null)
+                    finally
                     {
-                        SegmentBufferDeflector.ShiftBuffer(_configuration.BufferManager, consumedLength, ref _receiveBuffer, ref _receiveBufferOffset);
+                        timeoutCts?.Dispose();
+                        linkedCts?.Dispose();
                     }
-
-                    // 设置超时取消令牌
                 }
             }
             catch (ObjectDisposedException)
             {
                 // Graceful exit
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 正常取消，不需要额外处理
             }
             catch (Exception ex)
             {
@@ -348,7 +463,8 @@ namespace Wombat.Network.Sockets
             _tcpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, _configuration.ReuseAddress);
         }
 
-        private async Task<Stream> NegotiateStream(Stream stream)
+        // 添加新的异步协商方法
+        private async Task<Stream> NegotiateStreamAsync(Stream stream, CancellationToken cancellationToken)
         {
             if (!_configuration.SslEnabled)
                 return stream;
@@ -572,12 +688,12 @@ namespace Wombat.Network.Sockets
 
         #region Send
 
-        public async Task SendAsync(byte[] data,CancellationToken cancellationToken)
+        public async Task SendAsync(byte[] data, CancellationToken cancellationToken = default)
         {
             await SendAsync(data, 0, data.Length, cancellationToken);
         }
 
-        public async Task SendAsync(byte[] data, int offset, int count, CancellationToken cancellationToken)
+        public async Task SendAsync(byte[] data, int offset, int count, CancellationToken cancellationToken = default)
         {
             BufferValidator.ValidateBuffer(data, offset, count, "data");
 
@@ -586,18 +702,48 @@ namespace Wombat.Network.Sockets
                 throw new InvalidOperationException("This client has not connected to server.");
             }
 
+            CancellationTokenSource timeoutCts = null;
+            CancellationTokenSource linkedCts = null;
+            
             try
             {
+                timeoutCts = new CancellationTokenSource(_configuration.SendTimeout);
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+                
                 byte[] frameBuffer;
                 int frameBufferOffset;
                 int frameBufferLength;
                 _configuration.FrameBuilder.Encoder.EncodeFrame(data, offset, count, out frameBuffer, out frameBufferOffset, out frameBufferLength);
 
-                await _stream.WriteAsync(frameBuffer, frameBufferOffset, frameBufferLength,cancellationToken);
+                // 使用带超时的写入
+                var sendTask = _stream.WriteAsync(frameBuffer, frameBufferOffset, frameBufferLength);
+                
+                // 添加超时
+                if (await Task.WhenAny(sendTask, Task.Delay(_configuration.SendTimeout, linkedCts.Token)) != sendTask)
+                {
+                    if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    {
+                        throw new TimeoutException($"Send operation timed out after {_configuration.SendTimeout.TotalMilliseconds}ms");
+                    }
+                    // 如果是外部取消，就继续让异常抛出
+                }
+                
+                // 确保发送任务已完成
+                await sendTask;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 外部请求取消，直接抛出
+                throw;
             }
             catch (Exception ex)
             {
                 await HandleSendOperationException(ex);
+            }
+            finally
+            {
+                timeoutCts?.Dispose();
+                linkedCts?.Dispose();
             }
         }
 

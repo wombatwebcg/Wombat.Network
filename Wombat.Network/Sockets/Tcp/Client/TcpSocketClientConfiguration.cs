@@ -20,8 +20,8 @@ namespace Wombat.Network.Sockets
 
             ReceiveBufferSize = 8192;                   // Specifies the total per-socket buffer space reserved for receives. This is unrelated to the maximum message size or the size of a TCP window.
             SendBufferSize = 8192;                      // Specifies the total per-socket buffer space reserved for sends. This is unrelated to the maximum message size or the size of a TCP window.
-            ReceiveTimeout = TimeSpan.FromMilliseconds(100);             // Receive a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
-            SendTimeout = TimeSpan.FromMilliseconds(100);               // Send a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
+            ReceiveTimeout = TimeSpan.FromSeconds(30);  // Receive a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
+            SendTimeout = TimeSpan.FromSeconds(30);     // Send a time-out. This option applies only to synchronous methods; it has no effect on asynchronous methods such as the BeginSend method.
             NoDelay = true;                             // Disables the Nagle algorithm for send coalescing.
             LingerState = new LingerOption(false, 0);   // The socket will linger for x seconds after Socket.Close is called.
             KeepAlive = false;                          // Use keep-alives.
@@ -35,9 +35,15 @@ namespace Wombat.Network.Sockets
             SslEnabledProtocols = SslProtocols.Ssl3 | SslProtocols.Tls;
             SslCheckCertificateRevocation = false;
             SslPolicyErrorsBypassed = false;
-            ConnectTimeout = ConnectTimeout;
+            ConnectTimeout = TimeSpan.FromSeconds(30);  // Increased from 2 to 30 seconds
            
             FrameBuilder = new LengthPrefixedFrameBuilder();
+            
+            // 新增属性
+            OperationTimeout = TimeSpan.FromSeconds(30);
+            EnablePipelineIo = true;
+            MaxConcurrentConnections = 100;
+            MaxConcurrentOperations = 10;
         }
 
         public ISegmentBufferManager BufferManager { get; set; }
@@ -58,11 +64,31 @@ namespace Wombat.Network.Sockets
         public bool SslCheckCertificateRevocation { get; set; }
         public bool SslPolicyErrorsBypassed { get; set; }
 
-        public TimeSpan ConnectTimeout { get; set; } = TimeSpan.FromSeconds(2);
-        public TimeSpan ReceiveTimeout { get; set; } = TimeSpan.FromSeconds(1);
-        public TimeSpan SendTimeout { get; set; } = TimeSpan.FromSeconds(1);
-
+        public TimeSpan ConnectTimeout { get; set; }
+        public TimeSpan ReceiveTimeout { get; set; }
+        public TimeSpan SendTimeout { get; set; }
 
         public IFrameBuilder FrameBuilder { get; set; }
+        
+        // 新增属性
+        /// <summary>
+        /// 用于设置一般操作的超时时间，如处理接收到的消息等
+        /// </summary>
+        public TimeSpan OperationTimeout { get; set; }
+        
+        /// <summary>
+        /// 是否启用System.IO.Pipelines进行高性能I/O
+        /// </summary>
+        public bool EnablePipelineIo { get; set; }
+        
+        /// <summary>
+        /// 最大并发连接数
+        /// </summary>
+        public int MaxConcurrentConnections { get; set; }
+        
+        /// <summary>
+        /// 每个连接的最大并发操作数
+        /// </summary>
+        public int MaxConcurrentOperations { get; set; }
     }
 }

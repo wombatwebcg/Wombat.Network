@@ -46,6 +46,10 @@ namespace Wombat.Network.WebSockets
         private KeepAliveTracker _keepAliveTracker;
         private Timer _keepAliveTimeoutTimer;
         private Timer _closingTimeoutTimer;
+        
+        // 添加异步处理字段
+        private CancellationTokenSource _processCts;
+        private Task _processTask;
 
         #endregion
 
@@ -193,7 +197,7 @@ namespace Wombat.Network.WebSockets
         #endregion
         #region Connect
 
-        public async Task ConnectAsync()
+        public async Task ConnectAsync(CancellationToken cancellationToken = default)
         {
             int origin = Interlocked.Exchange(ref _state, _connecting);
             if (!(origin == _none || origin == _closed))
@@ -202,42 +206,91 @@ namespace Wombat.Network.WebSockets
                 throw new InvalidOperationException("This websocket client is in invalid state when connecting.");
             }
 
+            CancellationTokenSource timeoutCts = null;
+            CancellationTokenSource linkedCts = null;
+            
             try
             {
+                timeoutCts = new CancellationTokenSource(_configuration.ConnectTimeout);
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+
                 Clean(); // forcefully clean all things
                 ResetKeepAlive();
 
                 _tcpClient = new TcpClient(_remoteEndPoint.Address.AddressFamily);
-
-                var awaiter = _tcpClient.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
-                if (!awaiter.Wait(ConnectTimeout))
-                {
-                    await InternalClose(false);
-                    throw new TimeoutException(string.Format(
-                        "Connect to [{0}] timeout [{1}].", _remoteEndPoint, ConnectTimeout));
-                }
-
                 ConfigureClient();
-                var negotiator = NegotiateStream(_tcpClient.GetStream());
-                if (!negotiator.Wait(ConnectTimeout))
+
+                try
+                {
+                    // 替换阻塞调用为真正的异步
+                    var connectTask = _tcpClient.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
+                    
+                    // 添加超时
+                    if (await Task.WhenAny(connectTask, Task.Delay(_configuration.ConnectTimeout, linkedCts.Token)) != connectTask)
+                    {
+                        await InternalClose(false);
+                        throw new TimeoutException(string.Format(
+                            "Connect to [{0}] timeout [{1}].", _remoteEndPoint, _configuration.ConnectTimeout));
+                    }
+                    
+                    // 确保连接任务已完成
+                    await connectTask;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     await InternalClose(false);
-                    throw new TimeoutException(string.Format(
-                        "Negotiate SSL/TSL with remote [{0}] timeout [{1}].", RemoteEndPoint, ConnectTimeout));
+                    throw; // 重新抛出取消异常
                 }
-                _stream = negotiator.Result;
+
+                try
+                {
+                    // 替换阻塞调用为真正的异步
+                    var negotiateTask = NegotiateStreamAsync(_tcpClient.GetStream(), linkedCts.Token);
+                    
+                    // 添加超时
+                    if (await Task.WhenAny(negotiateTask, Task.Delay(_configuration.ConnectTimeout, linkedCts.Token)) != negotiateTask)
+                    {
+                        await InternalClose(false);
+                        throw new TimeoutException(string.Format(
+                            "Negotiate SSL/TSL with remote [{0}] timeout [{1}].", RemoteEndPoint, _configuration.ConnectTimeout));
+                    }
+                    
+                    // 获取协商结果
+                    _stream = await negotiateTask;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    await InternalClose(false);
+                    throw; // 重新抛出取消异常
+                }
 
                 _receiveBuffer = _configuration.BufferManager.BorrowBuffer();
                 _receiveBufferOffset = 0;
 
-                var handshaker = OpenHandshake();
-                if (!handshaker.Wait(ConnectTimeout))
+                bool handshakeResult = false;
+                try
                 {
-                    await Close(WebSocketCloseCode.ProtocolError, "Opening handshake timeout.");
-                    throw new TimeoutException(string.Format(
-                        "Handshake with remote [{0}] timeout [{1}].", RemoteEndPoint, ConnectTimeout));
+                    // 替换阻塞调用为真正的异步
+                    var handshakeTask = OpenHandshakeAsync(linkedCts.Token);
+                    
+                    // 添加超时
+                    if (await Task.WhenAny(handshakeTask, Task.Delay(_configuration.ConnectTimeout, linkedCts.Token)) != handshakeTask)
+                    {
+                        await Close(WebSocketCloseCode.ProtocolError, "Opening handshake timeout.");
+                        throw new TimeoutException(string.Format(
+                            "Handshake with remote [{0}] timeout [{1}].", RemoteEndPoint, _configuration.ConnectTimeout));
+                    }
+                    
+                    // 获取握手结果
+                    handshakeResult = await handshakeTask;
                 }
-                if (!handshaker.Result)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    await InternalClose(false);
+                    throw; // 重新抛出取消异常
+                }
+
+                if (!handshakeResult)
                 {
                     await Close(WebSocketCloseCode.ProtocolError, "Opening handshake failed.");
                     throw new WebSocketException(string.Format(
@@ -268,13 +321,10 @@ namespace Wombat.Network.WebSockets
 
                 if (!isErrorOccurredInUserSide)
                 {
-                    Task.Factory.StartNew(async () =>
-                    {
-                        _keepAliveTracker.StartTimer();
-                        await Process();
-                    },
-                    TaskCreationOptions.LongRunning)
-                    .Forget();
+                    // 使用取消令牌启动处理任务
+                    _processCts = new CancellationTokenSource();
+                    _processTask = ProcessAsync(_processCts.Token);
+                    _keepAliveTracker.StartTimer();
                 }
                 else
                 {
@@ -284,21 +334,18 @@ namespace Wombat.Network.WebSockets
             catch (Exception ex)
             {
                 _logger?.LogError(ex.Message, ex);
+                await InternalClose(false);
                 throw;
             }
+            finally
+            {
+                timeoutCts?.Dispose();
+                linkedCts?.Dispose();
+            }
         }
-
-        private void ConfigureClient()
-        {
-            _tcpClient.ReceiveBufferSize = _configuration.ReceiveBufferSize;
-            _tcpClient.SendBufferSize = _configuration.SendBufferSize;
-            _tcpClient.ReceiveTimeout = (int)_configuration.ReceiveTimeout.TotalMilliseconds;
-            _tcpClient.SendTimeout = (int)_configuration.SendTimeout.TotalMilliseconds;
-            _tcpClient.NoDelay = _configuration.NoDelay;
-            _tcpClient.LingerState = _configuration.LingerState;
-        }
-
-        private async Task<Stream> NegotiateStream(Stream stream)
+        
+        // 添加新的异步协商方法
+        private async Task<Stream> NegotiateStreamAsync(Stream stream, CancellationToken cancellationToken)
         {
             if (!_sslEnabled)
                 return stream;
@@ -316,7 +363,7 @@ namespace Wombat.Network.WebSockets
                     if (_configuration.SslPolicyErrorsBypassed)
                         return true;
                     else
-                        _logger.LogError("Error occurred when validating remote certificate: [{0}], [{1}].",
+                        _logger?.LogError("Error occurred when validating remote certificate: [{0}], [{1}].",
                             this.RemoteEndPoint, sslPolicyErrors);
 
                     return false;
@@ -331,16 +378,15 @@ namespace Wombat.Network.WebSockets
 
             if (_configuration.SslClientCertificates == null || _configuration.SslClientCertificates.Count == 0)
             {
-                await sslStream.AuthenticateAsClientAsync( // No client certificates are used in the authentication. The certificate revocation list is not checked during authentication.
-                    _configuration.SslTargetHost); // The name of the server that will share this SslStream. The value specified for targetHost must match the name on the server's certificate.
+                await sslStream.AuthenticateAsClientAsync(_configuration.SslTargetHost);
             }
             else
             {
                 await sslStream.AuthenticateAsClientAsync(
-                    _configuration.SslTargetHost, // The name of the server that will share this SslStream. The value specified for targetHost must match the name on the server's certificate.
-                    _configuration.SslClientCertificates, // The X509CertificateCollection that contains client certificates.
-                    _configuration.SslEnabledProtocols, // The SslProtocols value that represents the protocol used for authentication.
-                    _configuration.SslCheckCertificateRevocation); // A Boolean value that specifies whether the certificate revocation list is checked during authentication.
+                    _configuration.SslTargetHost,
+                    _configuration.SslClientCertificates,
+                    _configuration.SslEnabledProtocols,
+                    _configuration.SslCheckCertificateRevocation);
             }
 
             // When authentication succeeds, you must check the IsEncrypted and IsSigned properties 
@@ -364,15 +410,16 @@ namespace Wombat.Network.WebSockets
 
             return sslStream;
         }
-
-        private async Task<bool> OpenHandshake()
+        
+        // 添加异步握手方法
+        private async Task<bool> OpenHandshakeAsync(CancellationToken cancellationToken)
         {
             bool handshakeResult = false;
 
             try
             {
                 var requestBuffer = WebSocketClientHandshaker.CreateOpenningHandshakeRequest(this, out _secWebSocketKey);
-                await _stream.WriteAsync(requestBuffer, 0, requestBuffer.Length);
+                await _stream.WriteAsync(requestBuffer, 0, requestBuffer.Length, cancellationToken);
 
                 int terminatorIndex = -1;
                 while (!WebSocketHelpers.FindHttpMessageTerminator(_receiveBuffer.Array, _receiveBuffer.Offset, _receiveBufferOffset, out terminatorIndex))
@@ -380,7 +427,8 @@ namespace Wombat.Network.WebSockets
                     int receiveCount = await _stream.ReadAsync(
                         _receiveBuffer.Array,
                         _receiveBuffer.Offset + _receiveBufferOffset,
-                        _receiveBuffer.Count - _receiveBufferOffset);
+                        _receiveBuffer.Count - _receiveBufferOffset,
+                        cancellationToken);
                     if (receiveCount == 0)
                     {
                         throw new WebSocketHandshakeException(string.Format(
@@ -434,7 +482,17 @@ namespace Wombat.Network.WebSockets
 
         #region Process
 
-        private async Task Process()
+        private void ConfigureClient()
+        {
+            _tcpClient.ReceiveBufferSize = _configuration.ReceiveBufferSize;
+            _tcpClient.SendBufferSize = _configuration.SendBufferSize;
+            _tcpClient.ReceiveTimeout = (int)_configuration.ReceiveTimeout.TotalMilliseconds;
+            _tcpClient.SendTimeout = (int)_configuration.SendTimeout.TotalMilliseconds;
+            _tcpClient.NoDelay = _configuration.NoDelay;
+            _tcpClient.LingerState = _configuration.LingerState;
+        }
+
+        private async Task ProcessAsync(CancellationToken cancellationToken)
         {
             try
             {
@@ -444,115 +502,172 @@ namespace Wombat.Network.WebSockets
                 int payloadCount;
                 int consumedLength = 0;
 
-                while (State == WebSocketState.Open || State == WebSocketState.Closing)
+                while ((State == WebSocketState.Open || State == WebSocketState.Closing) && !cancellationToken.IsCancellationRequested)
                 {
-                    int receiveCount = await _stream.ReadAsync(
-                        _receiveBuffer.Array,
-                        _receiveBuffer.Offset + _receiveBufferOffset,
-                        _receiveBuffer.Count - _receiveBufferOffset);
-                    if (receiveCount == 0)
-                        break;
-
-                    _keepAliveTracker.OnDataReceived();
-                    SegmentBufferDeflector.ReplaceBuffer(_configuration.BufferManager, ref _receiveBuffer, ref _receiveBufferOffset, receiveCount);
-                    consumedLength = 0;
-
-                    while (true)
+                    // 使用带超时的读取
+                    CancellationTokenSource timeoutCts = null;
+                    CancellationTokenSource linkedCts = null;
+                    
+                    try
                     {
-                        frameHeader = null;
-                        payload = null;
-                        payloadOffset = 0;
-                        payloadCount = 0;
-
-                        if (_frameBuilder.TryDecodeFrameHeader(
+                        timeoutCts = new CancellationTokenSource(_configuration.ReceiveTimeout);
+                        linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+                        
+                        var receiveTask = _stream.ReadAsync(
                             _receiveBuffer.Array,
-                            _receiveBuffer.Offset + consumedLength,
-                            _receiveBufferOffset - consumedLength,
-                            out frameHeader)
-                            && frameHeader.Length + frameHeader.PayloadLength <= _receiveBufferOffset - consumedLength)
+                            _receiveBuffer.Offset + _receiveBufferOffset,
+                            _receiveBuffer.Count - _receiveBufferOffset);
+                            
+                        // 添加超时
+                        if (await Task.WhenAny(receiveTask, Task.Delay(_configuration.ReceiveTimeout, linkedCts.Token)) != receiveTask)
                         {
-                            try
+                            if (!cancellationToken.IsCancellationRequested)
                             {
-                                if (frameHeader.IsMasked)
-                                {
-                                    await Close(WebSocketCloseCode.ProtocolError, "A client MUST close a connection if it detects a masked frame.");
-                                    throw new WebSocketException(string.Format(
-                                        "Client received masked frame [{0}] from remote [{1}].", frameHeader.OpCode, RemoteEndPoint));
-                                }
-
-                                _frameBuilder.DecodePayload(
-                                    _receiveBuffer.Array,
-                                    _receiveBuffer.Offset + consumedLength,
-                                    frameHeader,
-                                    out payload, out payloadOffset, out payloadCount);
-
-                                switch (frameHeader.OpCode)
-                                {
-                                    case OpCode.Continuation:
-                                        await HandleContinuationFrame(frameHeader, payload, payloadOffset, payloadCount);
-                                        break;
-                                    case OpCode.Text:
-                                        await HandleTextFrame(frameHeader, payload, payloadOffset, payloadCount);
-                                        break;
-                                    case OpCode.Binary:
-                                        await HandleBinaryFrame(frameHeader, payload, payloadOffset, payloadCount);
-                                        break;
-                                    case OpCode.Close:
-                                        await HandleCloseFrame(frameHeader, payload, payloadOffset, payloadCount);
-                                        break;
-                                    case OpCode.Ping:
-                                        await HandlePingFrame(frameHeader, payload, payloadOffset, payloadCount);
-                                        break;
-                                    case OpCode.Pong:
-                                        await HandlePongFrame(frameHeader, payload, payloadOffset, payloadCount);
-                                        break;
-                                    default:
-                                        {
-                                            // Incoming data MUST always be validated by both clients and servers.
-                                            // If, at any time, an endpoint is faced with data that it does not
-                                            // understand or that violates some criteria by which the endpoint
-                                            // determines safety of input, or when the endpoint sees an opening
-                                            // handshake that does not correspond to the values it is expecting
-                                            // (e.g., incorrect path or origin in the client request), the endpoint
-                                            // MAY drop the TCP connection.  If the invalid data was received after
-                                            // a successful WebSocket handshake, the endpoint SHOULD send a Close
-                                            // frame with an appropriate status code (Section 7.4) before proceeding
-                                            // to _Close the WebSocket Connection_.  Use of a Close frame with an
-                                            // appropriate status code can help in diagnosing the problem.  If the
-                                            // invalid data is sent during the WebSocket handshake, the server
-                                            // SHOULD return an appropriate HTTP [RFC2616] status code.
-                                            await Close(WebSocketCloseCode.InvalidMessageType);
-                                            throw new NotSupportedException(
-                                                string.Format("Not support received opcode [{0}].", (byte)frameHeader.OpCode));
-                                        }
-                                }
+                                // 读取超时，可以选择继续或关闭，这里选择继续
+                                _logger?.LogWarning("Read operation timed out after {0}ms, continuing", 
+                                    _configuration.ReceiveTimeout.TotalMilliseconds);
+                                continue;
                             }
-                            catch (Exception ex)
+                            else
                             {
-                                _logger?.LogError(ex.Message, ex);
-                                throw;
-                            }
-                            finally
-                            {
-                                consumedLength += frameHeader.Length + frameHeader.PayloadLength;
+                                // 外部请求取消
+                                break;
                             }
                         }
-                        else
-                        {
+                        
+                        // 获取接收结果
+                        int receiveCount = await receiveTask;
+                        
+                        if (receiveCount == 0)
                             break;
+
+                        _keepAliveTracker.OnDataReceived();
+                        SegmentBufferDeflector.ReplaceBuffer(_configuration.BufferManager, ref _receiveBuffer, ref _receiveBufferOffset, receiveCount);
+                        consumedLength = 0;
+
+                        // 处理WebSocket帧
+                        while (true)
+                        {
+                            frameHeader = null;
+                            payload = null;
+                            payloadOffset = 0;
+                            payloadCount = 0;
+
+                            if (_frameBuilder.TryDecodeFrameHeader(
+                                _receiveBuffer.Array,
+                                _receiveBuffer.Offset + consumedLength,
+                                _receiveBufferOffset - consumedLength,
+                                out frameHeader)
+                                && frameHeader.Length + frameHeader.PayloadLength <= _receiveBufferOffset - consumedLength)
+                            {
+                                try
+                                {
+                                    if (frameHeader.IsMasked)
+                                    {
+                                        await Close(WebSocketCloseCode.ProtocolError, "A client MUST close a connection if it detects a masked frame.");
+                                        throw new WebSocketException(string.Format(
+                                            "Client received masked frame [{0}] from remote [{1}].", frameHeader.OpCode, RemoteEndPoint));
+                                    }
+
+                                    _frameBuilder.DecodePayload(
+                                        _receiveBuffer.Array,
+                                        _receiveBuffer.Offset + consumedLength,
+                                        frameHeader,
+                                        out payload, out payloadOffset, out payloadCount);
+
+                                    // 使用带超时的处理
+                                    using (var dispatchCts = new CancellationTokenSource(_configuration.OperationTimeout))
+                                    using (var dispatchLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(dispatchCts.Token, cancellationToken))
+                                    {
+                                        var dispatchTask = Task.CompletedTask;
+                                        
+                                        switch (frameHeader.OpCode)
+                                        {
+                                            case OpCode.Continuation:
+                                                dispatchTask = HandleContinuationFrame(frameHeader, payload, payloadOffset, payloadCount);
+                                                break;
+                                            case OpCode.Text:
+                                                dispatchTask = HandleTextFrame(frameHeader, payload, payloadOffset, payloadCount);
+                                                break;
+                                            case OpCode.Binary:
+                                                dispatchTask = HandleBinaryFrame(frameHeader, payload, payloadOffset, payloadCount);
+                                                break;
+                                            case OpCode.Close:
+                                                dispatchTask = HandleCloseFrame(frameHeader, payload, payloadOffset, payloadCount);
+                                                break;
+                                            case OpCode.Ping:
+                                                dispatchTask = HandlePingFrame(frameHeader, payload, payloadOffset, payloadCount);
+                                                break;
+                                            case OpCode.Pong:
+                                                dispatchTask = HandlePongFrame(frameHeader, payload, payloadOffset, payloadCount);
+                                                break;
+                                            default:
+                                                await Close(WebSocketCloseCode.InvalidMessageType);
+                                                throw new NotSupportedException(string.Format(
+                                                    "Not support received opcode [{0}].", (byte)frameHeader.OpCode));
+                                        }
+                                        
+                                        // 添加超时
+                                        if (await Task.WhenAny(dispatchTask, Task.Delay(_configuration.OperationTimeout, dispatchLinkedCts.Token)) != dispatchTask)
+                                        {
+                                            if (!cancellationToken.IsCancellationRequested)
+                                            {
+                                                _logger?.LogWarning("Frame handler timed out after {0}ms", 
+                                                    _configuration.OperationTimeout.TotalMilliseconds);
+                                            }
+                                            else
+                                            {
+                                                // 外部请求取消
+                                                return;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // 确保处理任务已完成
+                                            await dispatchTask;
+                                        }
+                                    }
+                                }
+                                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                                {
+                                    // 外部请求取消，直接退出
+                                    return;
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger?.LogError(ex.Message, ex);
+                                    throw;
+                                }
+                                finally
+                                {
+                                    consumedLength += frameHeader.Length + frameHeader.PayloadLength;
+                                }
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+
+                        if (_receiveBuffer != null && _receiveBuffer.Array != null)
+                        {
+                            SegmentBufferDeflector.ShiftBuffer(_configuration.BufferManager, consumedLength, ref _receiveBuffer, ref _receiveBufferOffset);
                         }
                     }
-
-                    if (_receiveBuffer != null && _receiveBuffer.Array != null)
+                    finally
                     {
-                        SegmentBufferDeflector.ShiftBuffer(_configuration.BufferManager, consumedLength, ref _receiveBuffer, ref _receiveBufferOffset);
+                        timeoutCts?.Dispose();
+                        linkedCts?.Dispose();
                     }
                 }
             }
             catch (ObjectDisposedException)
             {
-                // looking forward to a graceful quit from the ReadAsync but the inside EndRead will raise the ObjectDisposedException,
-                // so a gracefully close for the socket should be a Shutdown, but we cannot avoid the Close triggers this happen.
+                // 优雅退出
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 正常取消，不需要额外处理
             }
             catch (Exception ex)
             {
@@ -560,7 +675,7 @@ namespace Wombat.Network.WebSockets
             }
             finally
             {
-                await InternalClose(true); // read async buffer returned, remote notifies closed
+                await InternalClose(true); // 读取异步缓冲区返回，远程通知关闭
             }
         }
 
@@ -687,16 +802,6 @@ namespace Wombat.Network.WebSockets
                     "Client received unfinished frame [{0}] from remote [{1}].", frameHeader.OpCode, RemoteEndPoint));
             }
 
-            // Upon receipt of a Ping frame, an endpoint MUST send a Pong frame in
-            // response, unless it already received a Close frame.  It SHOULD
-            // respond with Pong frame as soon as is practical.  Pong frames are
-            // discussed in Section 5.5.3.
-            // 
-            // An endpoint MAY send a Ping frame any time after the connection is
-            // established and before the connection is closed.
-            // 
-            // A Ping frame may serve either as a keep-alive or as a means to
-            // verify that the remote endpoint is still responsive.
             var ping = Encoding.UTF8.GetString(payload, payloadOffset, payloadCount);
 #if DEBUG
             _logger?.LogDebug("Receive server side ping frame [{0}].", ping);
@@ -706,7 +811,7 @@ namespace Wombat.Network.WebSockets
                 // A Pong frame sent in response to a Ping frame must have identical
                 // "Application data" as found in the message body of the Ping frame being replied to.
                 var pong = new PongFrame(ping).ToArray(_frameBuilder);
-                await SendFrame(pong);
+                await SendFrameAsync(pong);
 #if DEBUG
                 _logger?.LogDebug("Send client side pong frame [{0}].", ping);
 #endif
@@ -983,27 +1088,35 @@ namespace Wombat.Network.WebSockets
 
         #region Send
 
-        public async Task SendTextAsync(string text)
+        public async Task SendTextAsync(string text, CancellationToken cancellationToken = default)
         {
-            await SendFrame(new TextFrame(text).ToArray(_frameBuilder));
+            if (text == null)
+                throw new ArgumentNullException("text");
+
+            await SendFrameAsync(new TextFrame(text).ToArray(_frameBuilder), cancellationToken);
         }
 
-        public async Task SendBinaryAsync(byte[] data)
+        public async Task SendBinaryAsync(byte[] data, CancellationToken cancellationToken = default)
         {
-            await SendBinaryAsync(data, 0, data.Length);
+            if (data == null)
+                throw new ArgumentNullException("data");
+
+            await SendBinaryAsync(data, 0, data.Length, cancellationToken);
         }
 
-        public async Task SendBinaryAsync(byte[] data, int offset, int count)
+        public async Task SendBinaryAsync(byte[] data, int offset, int count, CancellationToken cancellationToken = default)
         {
-            await SendFrame(new BinaryFrame(data, offset, count).ToArray(_frameBuilder));
+            BufferValidator.ValidateBuffer(data, offset, count, "data");
+
+            await SendFrameAsync(new BinaryFrame(data, offset, count).ToArray(_frameBuilder), cancellationToken);
         }
 
-        public async Task SendBinaryAsync(ArraySegment<byte> segment)
+        public async Task SendBinaryAsync(ArraySegment<byte> segment, CancellationToken cancellationToken = default)
         {
-            await SendFrame(new BinaryFrame(segment).ToArray(_frameBuilder));
+            await SendFrameAsync(new BinaryFrame(segment).ToArray(_frameBuilder), cancellationToken);
         }
 
-        public async Task SendStreamAsync(Stream stream)
+        public async Task SendStreamAsync(Stream stream, CancellationToken cancellationToken = default)
         {
             if (stream == null)
                 throw new ArgumentNullException("stream");
@@ -1012,27 +1125,27 @@ namespace Wombat.Network.WebSockets
             var buffer = new byte[fragmentLength];
             int readCount = 0;
 
-            readCount = await stream.ReadAsync(buffer, 0, fragmentLength);
+            readCount = await stream.ReadAsync(buffer, 0, fragmentLength, cancellationToken);
             if (readCount == 0)
                 return;
-            await SendFrame(new BinaryFragmentationFrame(OpCode.Binary, buffer, 0, readCount, isFin: false).ToArray(_frameBuilder));
+            await SendFrameAsync(new BinaryFragmentationFrame(OpCode.Binary, buffer, 0, readCount, isFin: false).ToArray(_frameBuilder), cancellationToken);
 
             while (true)
             {
-                readCount = await stream.ReadAsync(buffer, 0, fragmentLength);
+                readCount = await stream.ReadAsync(buffer, 0, fragmentLength, cancellationToken);
                 if (readCount != 0)
                 {
-                    await SendFrame(new BinaryFragmentationFrame(OpCode.Continuation, buffer, 0, readCount, isFin: false).ToArray(_frameBuilder));
+                    await SendFrameAsync(new BinaryFragmentationFrame(OpCode.Continuation, buffer, 0, readCount, isFin: false).ToArray(_frameBuilder), cancellationToken);
                 }
                 else
                 {
-                    await SendFrame(new BinaryFragmentationFrame(OpCode.Continuation, buffer, 0, 0, isFin: true).ToArray(_frameBuilder));
+                    await SendFrameAsync(new BinaryFragmentationFrame(OpCode.Continuation, buffer, 0, 0, isFin: true).ToArray(_frameBuilder), cancellationToken);
                     break;
                 }
             }
         }
 
-        private async Task SendFrame(byte[] frame)
+        private async Task SendFrameAsync(byte[] frame, CancellationToken cancellationToken = default)
         {
             if (frame == null)
             {
@@ -1043,14 +1156,44 @@ namespace Wombat.Network.WebSockets
                 throw new InvalidOperationException("This websocket client has not connected to server.");
             }
 
+            CancellationTokenSource timeoutCts = null;
+            CancellationTokenSource linkedCts = null;
+            
             try
             {
-                await _stream.WriteAsync(frame, 0, frame.Length);
+                timeoutCts = new CancellationTokenSource(_configuration.SendTimeout);
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+                
+                // 使用带超时的写入
+                var sendTask = _stream.WriteAsync(frame, 0, frame.Length);
+                
+                // 添加超时
+                if (await Task.WhenAny(sendTask, Task.Delay(_configuration.SendTimeout, linkedCts.Token)) != sendTask)
+                {
+                    if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    {
+                        throw new TimeoutException($"Send operation timed out after {_configuration.SendTimeout.TotalMilliseconds}ms");
+                    }
+                    // 如果是外部取消，就继续让异常抛出
+                }
+                
+                // 确保发送任务已完成
+                await sendTask;
                 _keepAliveTracker.OnDataSent();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 外部请求取消，直接抛出
+                throw;
             }
             catch (Exception ex)
             {
                 await HandleSendOperationException(ex);
+            }
+            finally
+            {
+                timeoutCts?.Dispose();
+                linkedCts?.Dispose();
             }
         }
 
@@ -1086,7 +1229,7 @@ namespace Wombat.Network.WebSockets
                     if (_keepAliveTracker.ShouldSendKeepAlive())
                     {
                         var keepAliveFrame = new PingFrame().ToArray(_frameBuilder);
-                        await SendFrame(keepAliveFrame);
+                        await SendFrameAsync(keepAliveFrame);
                         StartKeepAliveTimeoutTimer();
 #if DEBUG
                         _logger?.LogDebug("Send client side ping frame [{0}].", string.Empty);

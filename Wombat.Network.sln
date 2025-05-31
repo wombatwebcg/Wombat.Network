@@ -15,6 +15,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Wombat.WebSockets.TestWebSo
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Wombat.WebSockets.TestWebSocketServer", "Tests\Wombat.WebSockets.TestWebSocketServer\Wombat.WebSockets.TestWebSocketServer.csproj", "{C2653734-288A-4261-A86F-216649764BEB}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wombat.NetworkTests", "Wombat.NetworkTests\Wombat.NetworkTests.csproj", "{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,6 +43,10 @@ Global
 		{C2653734-288A-4261-A86F-216649764BEB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C2653734-288A-4261-A86F-216649764BEB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C2653734-288A-4261-A86F-216649764BEB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
