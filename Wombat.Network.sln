@@ -17,6 +17,10 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Wombat.WebSockets.TestWebSo
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wombat.NetworkTests", "Wombat.NetworkTests\Wombat.NetworkTests.csproj", "{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wombat.Socket.TestUdpSocketClient", "Tests\Wombat.Socket.TestUdpSocketClient\Wombat.Socket.TestUdpSocketClient.csproj", "{5DE23034-1C55-4330-9F9E-DD169C671C3D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wombat.Socket.TestUdpSocketServer", "Tests\Wombat.Socket.TestUdpSocketServer\Wombat.Socket.TestUdpSocketServer.csproj", "{095F7845-499F-4F5F-B936-9D7290034A24}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -47,6 +51,14 @@ Global
 		{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0B6BEB2E-9817-9B0A-F287-CF7E7B95E4F8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5DE23034-1C55-4330-9F9E-DD169C671C3D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5DE23034-1C55-4330-9F9E-DD169C671C3D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5DE23034-1C55-4330-9F9E-DD169C671C3D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5DE23034-1C55-4330-9F9E-DD169C671C3D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{095F7845-499F-4F5F-B936-9D7290034A24}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{095F7845-499F-4F5F-B936-9D7290034A24}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{095F7845-499F-4F5F-B936-9D7290034A24}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{095F7845-499F-4F5F-B936-9D7290034A24}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -56,6 +68,8 @@ Global
 		{70539DD8-657F-4D5F-8AF5-9A278E3F29B6} = {85D3A0B1-70FE-4938-B236-5C800992C634}
 		{6CD672DB-57B1-49B3-B93B-9B10CDCB87C1} = {85D3A0B1-70FE-4938-B236-5C800992C634}
 		{C2653734-288A-4261-A86F-216649764BEB} = {85D3A0B1-70FE-4938-B236-5C800992C634}
+		{5DE23034-1C55-4330-9F9E-DD169C671C3D} = {85D3A0B1-70FE-4938-B236-5C800992C634}
+		{095F7845-499F-4F5F-B936-9D7290034A24} = {85D3A0B1-70FE-4938-B236-5C800992C634}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {50E02E14-D5D0-4ECF-8640-423581EC92C4}
