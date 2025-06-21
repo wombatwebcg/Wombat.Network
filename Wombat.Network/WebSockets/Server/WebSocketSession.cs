@@ -49,7 +49,7 @@ namespace Wombat.Network.WebSockets
         private Timer _keepAliveTimeoutTimer;
         private Timer _closingTimeoutTimer;
 
-        #endregion
+        #endregion Fields
 
         #region Constructors
 
@@ -86,9 +86,7 @@ namespace Wombat.Network.WebSockets
                     (IPEndPoint)_tcpClient.Client.LocalEndPoint : null;
         }
 
-        #endregion
-
-
+        #endregion Constructors
 
         public void UsgLogger(ILogger log)
         {
@@ -97,23 +95,35 @@ namespace Wombat.Network.WebSockets
 
         #region Properties
 
-        public string SessionKey { get { return _sessionKey; } }
+        public string SessionKey
+        { get { return _sessionKey; } }
         public DateTime StartTime { get; private set; }
 
-        private bool Connected { get { return _tcpClient != null && _tcpClient.Client.Connected; } }
-        public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
-        public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : _localEndPoint; } }
+        private bool Connected
+        { get { return _tcpClient != null && _tcpClient.Client.Connected; } }
+        public IPEndPoint RemoteEndPoint
+        { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
+        public IPEndPoint LocalEndPoint
+        { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : _localEndPoint; } }
 
-        public WebSocketServer Server { get { return _server; } }
+        public WebSocketServer Server
+        { get { return _server; } }
 
-        public TimeSpan ConnectTimeout { get { return _configuration.ConnectTimeout; } }
-        public TimeSpan CloseTimeout { get { return _configuration.CloseTimeout; } }
-        public TimeSpan KeepAliveInterval { get { return _configuration.KeepAliveInterval; } }
-        public TimeSpan KeepAliveTimeout { get { return _configuration.KeepAliveTimeout; } }
+        public TimeSpan ConnectTimeout
+        { get { return _configuration.ConnectTimeout; } }
+        public TimeSpan CloseTimeout
+        { get { return _configuration.CloseTimeout; } }
+        public TimeSpan KeepAliveInterval
+        { get { return _configuration.KeepAliveInterval; } }
+        public TimeSpan KeepAliveTimeout
+        { get { return _configuration.KeepAliveTimeout; } }
 
-        public IDictionary<string, IWebSocketExtensionNegotiator> EnabledExtensions { get { return _configuration.EnabledExtensions; } }
-        public IDictionary<string, IWebSocketSubProtocolNegotiator> EnabledSubProtocols { get { return _configuration.EnabledSubProtocols; } }
-        public SortedList<int, IWebSocketExtension> NegotiatedExtensions { get { return _frameBuilder.NegotiatedExtensions; } }
+        public IDictionary<string, IWebSocketExtensionNegotiator> EnabledExtensions
+        { get { return _configuration.EnabledExtensions; } }
+        public IDictionary<string, IWebSocketSubProtocolNegotiator> EnabledSubProtocols
+        { get { return _configuration.EnabledSubProtocols; } }
+        public SortedList<int, IWebSocketExtension> NegotiatedExtensions
+        { get { return _frameBuilder.NegotiatedExtensions; } }
         public IWebSocketSubProtocol NegotiatedSubProtocol { get; private set; }
 
         public ConnectionState State
@@ -124,14 +134,19 @@ namespace Wombat.Network.WebSockets
                 {
                     case _none:
                         return ConnectionState.None;
+
                     case _connecting:
                         return ConnectionState.Connecting;
+
                     case _connected:
                         return ConnectionState.Connected;
+
                     case _closing:
                         return ConnectionState.Closing;
+
                     case _disposed:
                         return ConnectionState.Closed;
+
                     default:
                         return ConnectionState.Closed;
                 }
@@ -144,7 +159,7 @@ namespace Wombat.Network.WebSockets
                 this.SessionKey, this.RemoteEndPoint, this.LocalEndPoint);
         }
 
-        #endregion
+        #endregion Properties
 
         #region Start
 
@@ -198,11 +213,11 @@ namespace Wombat.Network.WebSockets
                     throw new ObjectDisposedException("This websocket session has been disposed after connected.");
                 }
 
-               _logger?.LogDebug("Session started for [{0}] on [{1}] in module [{2}] with session count [{3}].",
-                    this.RemoteEndPoint,
-                    this.StartTime.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff"),
-                    _module.GetType().Name,
-                    this.Server.SessionCount);
+                _logger?.LogDebug("Session started for [{0}] on [{1}] in module [{2}] with session count [{3}].",
+                     this.RemoteEndPoint,
+                     this.StartTime.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff"),
+                     _module.GetType().Name,
+                     this.Server.SessionCount);
                 bool isErrorOccurredInUserSide = false;
                 try
                 {
@@ -225,7 +240,7 @@ namespace Wombat.Network.WebSockets
                 }
             }
             catch (Exception ex)
-            when(ex is TimeoutException || ex is WebSocketException)
+            when (ex is TimeoutException || ex is WebSocketException)
             {
                 _logger?.LogError(string.Format("Session [{0}] exception occurred, [{1}].", this, ex.Message), ex);
                 await InternalClose(true); // handle tcp connection error occurred
@@ -288,24 +303,24 @@ namespace Wombat.Network.WebSockets
                     _configuration.SslCheckCertificateRevocation); // A Boolean value that specifies whether the certificate revocation list is checked during authentication.
             }
 
-            // When authentication succeeds, you must check the IsEncrypted and IsSigned properties 
-            // to determine what security services are used by the SslStream. 
+            // When authentication succeeds, you must check the IsEncrypted and IsSigned properties
+            // to determine what security services are used by the SslStream.
             // Check the IsMutuallyAuthenticated property to determine whether mutual authentication occurred.
-           _logger?.LogDebug(
-                "Ssl Stream: SslProtocol[{0}], IsServer[{1}], IsAuthenticated[{2}], IsEncrypted[{3}], IsSigned[{4}], IsMutuallyAuthenticated[{5}], "
-                + "HashAlgorithm[{6}], HashStrength[{7}], KeyExchangeAlgorithm[{8}], KeyExchangeStrength[{9}], CipherAlgorithm[{10}], CipherStrength[{11}].",
-                sslStream.SslProtocol,
-                sslStream.IsServer,
-                sslStream.IsAuthenticated,
-                sslStream.IsEncrypted,
-                sslStream.IsSigned,
-                sslStream.IsMutuallyAuthenticated,
-                sslStream.HashAlgorithm,
-                sslStream.HashStrength,
-                sslStream.KeyExchangeAlgorithm,
-                sslStream.KeyExchangeStrength,
-                sslStream.CipherAlgorithm,
-                sslStream.CipherStrength);
+            _logger?.LogDebug(
+                 "Ssl Stream: SslProtocol[{0}], IsServer[{1}], IsAuthenticated[{2}], IsEncrypted[{3}], IsSigned[{4}], IsMutuallyAuthenticated[{5}], "
+                 + "HashAlgorithm[{6}], HashStrength[{7}], KeyExchangeAlgorithm[{8}], KeyExchangeStrength[{9}], CipherAlgorithm[{10}], CipherStrength[{11}].",
+                 sslStream.SslProtocol,
+                 sslStream.IsServer,
+                 sslStream.IsAuthenticated,
+                 sslStream.IsEncrypted,
+                 sslStream.IsSigned,
+                 sslStream.IsMutuallyAuthenticated,
+                 sslStream.HashAlgorithm,
+                 sslStream.HashStrength,
+                 sslStream.KeyExchangeAlgorithm,
+                 sslStream.KeyExchangeStrength,
+                 sslStream.CipherAlgorithm,
+                 sslStream.CipherStrength);
 
             return sslStream;
         }
@@ -382,7 +397,7 @@ namespace Wombat.Network.WebSockets
             _closingTimeoutTimer = new Timer(new TimerCallback((s) => OnCloseTimeout()), null, Timeout.Infinite, Timeout.Infinite);
         }
 
-        #endregion
+        #endregion Start
 
         #region Process
 
@@ -443,21 +458,27 @@ namespace Wombat.Network.WebSockets
                                     case OpCode.Continuation:
                                         await HandleContinuationFrame(frameHeader, payload, payloadOffset, payloadCount);
                                         break;
+
                                     case OpCode.Text:
                                         await HandleTextFrame(frameHeader, payload, payloadOffset, payloadCount);
                                         break;
+
                                     case OpCode.Binary:
                                         await HandleBinaryFrame(frameHeader, payload, payloadOffset, payloadCount);
                                         break;
+
                                     case OpCode.Close:
                                         await HandleCloseFrame(frameHeader, payload, payloadOffset, payloadCount);
                                         break;
+
                                     case OpCode.Ping:
                                         await HandlePingFrame(frameHeader, payload, payloadOffset, payloadCount);
                                         break;
+
                                     case OpCode.Pong:
                                         await HandlePongFrame(frameHeader, payload, payloadOffset, payloadCount);
                                         break;
+
                                     default:
                                         {
                                             // Incoming data MUST always be validated by both clients and servers.
@@ -614,7 +635,7 @@ namespace Wombat.Network.WebSockets
                     closeReason = Encoding.UTF8.GetString(payload, payloadOffset + 2, payloadCount - 2);
                 }
 #if DEBUG
-               _logger?.LogDebug("Session [{0}] received client side close frame [{1}] [{2}].", this, closeCode, closeReason);
+                _logger?.LogDebug("Session [{0}] received client side close frame [{1}] [{2}].", this, closeCode, closeReason);
 #endif
                 // If an endpoint receives a Close frame and did not previously send a
                 // Close frame, the endpoint MUST send a Close frame in response.  (When
@@ -625,7 +646,7 @@ namespace Wombat.Network.WebSockets
             else
             {
 #if DEBUG
-               _logger?.LogDebug("Session [{0}] received client side close frame but no status code.", this);
+                _logger?.LogDebug("Session [{0}] received client side close frame but no status code.", this);
 #endif
                 await Close(WebSocketCloseCode.InvalidPayloadData);
             }
@@ -643,15 +664,15 @@ namespace Wombat.Network.WebSockets
             // response, unless it already received a Close frame.  It SHOULD
             // respond with Pong frame as soon as is practical.  Pong frames are
             // discussed in Section 5.5.3.
-            // 
+            //
             // An endpoint MAY send a Ping frame any time after the connection is
             // established and before the connection is closed.
-            // 
+            //
             // A Ping frame may serve either as a keep-alive or as a means to
             // verify that the remote endpoint is still responsive.
             var ping = Encoding.UTF8.GetString(payload, payloadOffset, payloadCount);
 #if DEBUG
-           _logger?.LogDebug("Session [{0}] received client side ping frame [{1}].", this, ping);
+            _logger?.LogDebug("Session [{0}] received client side ping frame [{1}].", this, ping);
 #endif
             if (State == ConnectionState.Connected)
             {
@@ -660,7 +681,7 @@ namespace Wombat.Network.WebSockets
                 var pong = new PongFrame(ping, false).ToArray(_frameBuilder);
                 await SendFrame(pong);
 #if DEBUG
-               _logger?.LogDebug("Session [{0}] sends server side pong frame [{1}].", this, ping);
+                _logger?.LogDebug("Session [{0}] sends server side pong frame [{1}].", this, ping);
 #endif
             }
         }
@@ -676,18 +697,18 @@ namespace Wombat.Network.WebSockets
             // If an endpoint receives a Ping frame and has not yet sent Pong
             // frame(s) in response to previous Ping frame(s), the endpoint MAY
             // elect to send a Pong frame for only the most recently processed Ping frame.
-            // 
+            //
             // A Pong frame MAY be sent unsolicited.  This serves as a
             // unidirectional heartbeat.  A response to an unsolicited Pong frame is not expected.
             var pong = Encoding.UTF8.GetString(payload, payloadOffset, payloadCount);
             StopKeepAliveTimeoutTimer();
 #if DEBUG
-           _logger?.LogDebug("Session [{0}] received client side pong frame [{1}].", this, pong);
+            _logger?.LogDebug("Session [{0}] received client side pong frame [{1}].", this, pong);
 #endif
             await Task.CompletedTask;
         }
 
-        #endregion
+        #endregion Process
 
         #region Close
 
@@ -712,7 +733,7 @@ namespace Wombat.Network.WebSockets
                             await _stream.WriteAsync(closingHandshake, 0, closingHandshake.Length);
                             StartClosingTimer();
 #if DEBUG
-                           _logger?.LogDebug("Session [{0}] sends server side close frame [{1}] [{2}].", this, closeCode, closeReason);
+                            _logger?.LogDebug("Session [{0}] sends server side close frame [{1}] [{2}].", this, closeCode, closeReason);
 #endif
                         }
                         catch (Exception ex)
@@ -745,11 +766,11 @@ namespace Wombat.Network.WebSockets
 
             if (shallNotifyUserSide)
             {
-               _logger?.LogDebug("Session closed for [{0}] on [{1}] in dispatcher [{2}] with session count [{3}].",
-                    this.RemoteEndPoint,
-                    DateTime.UtcNow.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff"),
-                    _module.GetType().Name,
-                    this.Server.SessionCount - 1);
+                _logger?.LogDebug("Session closed for [{0}] on [{1}] in dispatcher [{2}] with session count [{3}].",
+                     this.RemoteEndPoint,
+                     DateTime.UtcNow.ToString(@"yyyy-MM-dd HH:mm:ss.fffffff"),
+                     _module.GetType().Name,
+                     this.Server.SessionCount - 1);
                 try
                 {
                     await _module.OnSessionClosed(this);
@@ -765,9 +786,9 @@ namespace Wombat.Network.WebSockets
 
         public void Shutdown()
         {
-            // The correct way to shut down the connection (especially if you are in a full-duplex conversation) 
-            // is to call socket.Shutdown(SocketShutdown.Send) and give the remote party some time to close 
-            // their send channel. This ensures that you receive any pending data instead of slamming the 
+            // The correct way to shut down the connection (especially if you are in a full-duplex conversation)
+            // is to call socket.Shutdown(SocketShutdown.Send) and give the remote party some time to close
+            // their send channel. This ensures that you receive any pending data instead of slamming the
             // connection shut. ObjectDisposedException should never be part of the normal application flow.
             if (_tcpClient != null && _tcpClient.Connected)
             {
@@ -846,7 +867,7 @@ namespace Wombat.Network.WebSockets
 
         private void StartClosingTimer()
         {
-            // In abnormal cases (such as not having received a TCP Close 
+            // In abnormal cases (such as not having received a TCP Close
             // from the server after a reasonable amount of time) a client MAY initiate the TCP Close.
             _closingTimeoutTimer.Change((int)CloseTimeout.TotalMilliseconds, Timeout.Infinite);
         }
@@ -864,7 +885,7 @@ namespace Wombat.Network.WebSockets
             await InternalClose(true); // close timeout
         }
 
-        #endregion
+        #endregion Close
 
         #region Exception Handler
 
@@ -926,7 +947,7 @@ namespace Wombat.Network.WebSockets
             await Task.CompletedTask;
         }
 
-        #endregion
+        #endregion Exception Handler
 
         #region Send
 
@@ -1001,7 +1022,7 @@ namespace Wombat.Network.WebSockets
             }
         }
 
-        #endregion
+        #endregion Send
 
         #region Keep Alive
 
@@ -1036,7 +1057,7 @@ namespace Wombat.Network.WebSockets
                         await SendFrame(keepAliveFrame);
                         StartKeepAliveTimeoutTimer();
 #if DEBUG
-                       _logger?.LogDebug("Session [{0}] sends server side ping frame [{1}].", this, string.Empty);
+                        _logger?.LogDebug("Session [{0}] sends server side ping frame [{1}].", this, string.Empty);
 #endif
                         _keepAliveTracker.ResetTimer();
                     }
@@ -1053,7 +1074,7 @@ namespace Wombat.Network.WebSockets
             }
         }
 
-        #endregion
+        #endregion Keep Alive
 
         #region Extensions
 
@@ -1135,7 +1156,7 @@ namespace Wombat.Network.WebSockets
             _frameBuilder.NegotiatedExtensions = agreedExtensions;
         }
 
-        #endregion
+        #endregion Extensions
 
         #region Sub-Protocols
 
@@ -1145,7 +1166,7 @@ namespace Wombat.Network.WebSockets
                 throw new ArgumentNullException("protocols");
         }
 
-        #endregion
+        #endregion Sub-Protocols
 
         #region IDisposable Members
 
@@ -1173,6 +1194,6 @@ namespace Wombat.Network.WebSockets
             }
         }
 
-        #endregion
+        #endregion IDisposable Members
     }
 }
