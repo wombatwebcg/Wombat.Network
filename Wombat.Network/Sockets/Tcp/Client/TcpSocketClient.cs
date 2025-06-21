@@ -17,7 +17,8 @@ namespace Wombat.Network.Sockets
         #region Fields
 
         private  ILogger _logger;
-        private TcpClient _tcpClient;
+        private Socket _socket;
+        private NetworkStream _networkStream;
         private readonly ITcpSocketClientEventDispatcher _dispatcher;
         private readonly TcpSocketClientConfiguration _configuration;
         private readonly IPEndPoint _remoteEndPoint;
@@ -41,6 +42,12 @@ namespace Wombat.Network.Sockets
         private readonly AutoResetEvent _dataAvailableEvent = new AutoResetEvent(false);
         private readonly object _dataLock = new object();
         private long _totalBytesAvailable = 0;
+        
+        // 心跳相关字段
+        private Timer _heartbeatTimer;
+        private DateTime _lastReceivedHeartbeatTime;
+        private int _missedHeartbeats;
+        private readonly object _heartbeatLock = new object();
 
         #endregion
 
@@ -146,12 +153,11 @@ namespace Wombat.Network.Sockets
         {
             get
             {
-                return _tcpClient != null && _tcpClient.Connected;
-
+                return _socket != null && _socket.Connected;
             }
         }
-        public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
-        public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : _localEndPoint; } }
+        public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_socket.RemoteEndPoint : _remoteEndPoint; } }
+        public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_socket.LocalEndPoint : _localEndPoint; } }
 
         /// <summary>
         /// 指示接收缓冲区是否已满
@@ -233,17 +239,21 @@ namespace Wombat.Network.Sockets
                 timeoutCts = new CancellationTokenSource(_configuration.ConnectTimeout);
                 linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
 
-                _tcpClient = _localEndPoint != null ?
-                    new TcpClient(_localEndPoint) :
-                    new TcpClient(_remoteEndPoint.Address.AddressFamily);
+                _socket = _localEndPoint != null ?
+                    new Socket(_localEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp) :
+                    new Socket(_remoteEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                
+                if (_localEndPoint != null)
+                {
+                    _socket.Bind(_localEndPoint);
+                }
+                
                 SetSocketOptions();
 
                 try
                 {
-                    // 使用真正的异步操作替换阻塞等待
-                    var connectTask = _tcpClient.ConnectAsync(_remoteEndPoint.Address, _remoteEndPoint.Port);
+                    var connectTask = _socket.ConnectAsync(_remoteEndPoint);
                     
-                    // 添加超时
                     if (await Task.WhenAny(connectTask, Task.Delay(_configuration.ConnectTimeout, cancellationToken)) != connectTask)
                     {
                         await Close(false); // connect timeout
@@ -251,7 +261,6 @@ namespace Wombat.Network.Sockets
                             "Connect to [{0}] timeout [{1}].", _remoteEndPoint, _configuration.ConnectTimeout));
                     }
                     
-                    // 确保连接任务已完成
                     await connectTask;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -260,12 +269,12 @@ namespace Wombat.Network.Sockets
                     throw; // 重新抛出取消异常
                 }
 
-                // 使用异步方式协商流
+                _networkStream = new NetworkStream(_socket, true);
+
                 try
                 {
-                    var negotiateTask = NegotiateStreamAsync(_tcpClient.GetStream(), cancellationToken);
+                    var negotiateTask = NegotiateStreamAsync(_networkStream, cancellationToken);
                     
-                    // 添加超时
                     if (await Task.WhenAny(negotiateTask, Task.Delay(_configuration.ConnectTimeout, cancellationToken)) != negotiateTask)
                     {
                         await Close(false); // ssl negotiation timeout
@@ -273,7 +282,6 @@ namespace Wombat.Network.Sockets
                             "Negotiate SSL/TSL with remote [{0}] timeout [{1}].", _remoteEndPoint, _configuration.ConnectTimeout));
                     }
                     
-                    // 获取协商结果
                     _stream = await negotiateTask;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -312,6 +320,12 @@ namespace Wombat.Network.Sockets
                     // 使用取消令牌启动处理任务
                     _processCts = new CancellationTokenSource();
                     _processTask = ProcessAsync(_processCts.Token);
+                    
+                    // 启动心跳机制
+                    if (_configuration.EnableHeartbeat)
+                    {
+                        StartHeartbeat();
+                    }
                 }
                 else
                 {
@@ -404,49 +418,58 @@ namespace Wombat.Network.Sockets
                             {
                                 try
                                 {
-                                    // 将接收到的数据复制到队列中
-                                    if (payload != null && payloadCount > 0)
+                                    // 检查是否为心跳包
+                                    if (HeartbeatManager.IsHeartbeatPacket(payload, payloadOffset, payloadCount))
                                     {
-                                        byte[] dataCopy = new byte[payloadCount];
-                                        Buffer.BlockCopy(payload, payloadOffset, dataCopy, 0, payloadCount);
-                                        
-                                        lock (_dataLock)
-                                        {
-                                            // 检查缓冲区是否已满
-                                            if (_totalBytesAvailable + dataCopy.Length <= _configuration.MaxReceiveBufferSize)
-                                            {
-                                                _dataQueue.Enqueue(dataCopy);
-                                                _totalBytesAvailable += dataCopy.Length;
-                                                _dataAvailableEvent.Set(); // 发出信号，表示有数据可用
-                                            }
-
-                                        }
+                                        // 处理接收到的心跳包
+                                        ProcessHeartbeatPacket(payload, payloadOffset);
                                     }
-                                    
-                                    // 使用操作超时
-                                    using (var dispatchCts = new CancellationTokenSource(_configuration.OperationTimeout))
-                                    using (var dispatchLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(dispatchCts.Token, cancellationToken))
+                                    else
                                     {
-                                        var dispatchTask = _dispatcher.OnServerDataReceived(this, payload, payloadOffset, payloadCount);
-                                        
-                                        // 添加超时
-                                        if (await Task.WhenAny(dispatchTask, Task.Delay(_configuration.OperationTimeout, dispatchLinkedCts.Token)) != dispatchTask)
+                                        // 将接收到的数据复制到队列中
+                                        if (payload != null && payloadCount > 0)
                                         {
-                                            if (!cancellationToken.IsCancellationRequested)
+                                            byte[] dataCopy = new byte[payloadCount];
+                                            Buffer.BlockCopy(payload, payloadOffset, dataCopy, 0, payloadCount);
+                                            
+                                            lock (_dataLock)
                                             {
-                                                _logger?.LogWarning("Dispatch operation timed out after {0}ms", 
-                                                    _configuration.OperationTimeout.TotalMilliseconds);
+                                                // 检查缓冲区是否已满
+                                                if (_totalBytesAvailable + dataCopy.Length <= _configuration.MaxReceiveBufferSize)
+                                                {
+                                                    _dataQueue.Enqueue(dataCopy);
+                                                    _totalBytesAvailable += dataCopy.Length;
+                                                    _dataAvailableEvent.Set(); // 发出信号，表示有数据可用
+                                                }
+
+                                            }
+                                        }
+                                        
+                                        // 使用操作超时
+                                        using (var dispatchCts = new CancellationTokenSource(_configuration.OperationTimeout))
+                                        using (var dispatchLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(dispatchCts.Token, cancellationToken))
+                                        {
+                                            var dispatchTask = _dispatcher.OnServerDataReceived(this, payload, payloadOffset, payloadCount);
+                                            
+                                            // 添加超时
+                                            if (await Task.WhenAny(dispatchTask, Task.Delay(_configuration.OperationTimeout, dispatchLinkedCts.Token)) != dispatchTask)
+                                            {
+                                                if (!cancellationToken.IsCancellationRequested)
+                                                {
+                                                    _logger?.LogWarning("Dispatch operation timed out after {0}ms", 
+                                                        _configuration.OperationTimeout.TotalMilliseconds);
+                                                }
+                                                else
+                                                {
+                                                    // 外部请求取消
+                                                    return;
+                                                }
                                             }
                                             else
                                             {
-                                                // 外部请求取消
-                                                return;
+                                                // 确保调度任务已完成
+                                                await dispatchTask;
                                             }
-                                        }
-                                        else
-                                        {
-                                            // 确保调度任务已完成
-                                            await dispatchTask;
                                         }
                                     }
                                 }
@@ -502,22 +525,26 @@ namespace Wombat.Network.Sockets
 
         private void SetSocketOptions()
         {
-            _tcpClient.ReceiveBufferSize = _configuration.ReceiveBufferSize;
-            _tcpClient.SendBufferSize = _configuration.SendBufferSize;
-            _tcpClient.ReceiveTimeout = (int)_configuration.ReceiveTimeout.TotalMilliseconds;
-            _tcpClient.SendTimeout = (int)_configuration.SendTimeout.TotalMilliseconds;
-            _tcpClient.NoDelay = _configuration.NoDelay;
-            _tcpClient.LingerState = _configuration.LingerState;
+            _socket.ReceiveBufferSize = _configuration.ReceiveBufferSize;
+            _socket.SendBufferSize = _configuration.SendBufferSize;
+            _socket.ReceiveTimeout = (int)_configuration.ReceiveTimeout.TotalMilliseconds;
+            _socket.SendTimeout = (int)_configuration.SendTimeout.TotalMilliseconds;
+            
+            // 设置NoDelay选项（禁用Nagle算法）
+            _socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, _configuration.NoDelay);
+            
+            // 设置LingerState
+            _socket.LingerState = _configuration.LingerState;
 
             if (_configuration.KeepAlive)
             {
-                _tcpClient.Client.SetSocketOption(
+                _socket.SetSocketOption(
                     SocketOptionLevel.Socket,
                     SocketOptionName.KeepAlive,
                     (int)_configuration.KeepAliveInterval.TotalMilliseconds);
             }
 
-            _tcpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, _configuration.ReuseAddress);
+            _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, _configuration.ReuseAddress);
         }
 
         // 添加新的异步协商方法
@@ -612,6 +639,9 @@ namespace Wombat.Network.Sockets
                 return;
             }
 
+            // 停止心跳检测
+            StopHeartbeat();
+            
             Shutdown();
 
             if (shallNotifyUserSide)
@@ -639,9 +669,9 @@ namespace Wombat.Network.Sockets
             // is to call socket.Shutdown(SocketShutdown.Send) and give the remote party some time to close 
             // their send channel. This ensures that you receive any pending data instead of slamming the 
             // connection shut. ObjectDisposedException should never be part of the normal application flow.
-            if (_tcpClient != null && _tcpClient.Connected)
+            if (_socket != null && _socket.Connected)
             {
-                _tcpClient.Client.Shutdown(SocketShutdown.Send);
+                _socket.Shutdown(SocketShutdown.Send);
             }
         }
 
@@ -659,9 +689,23 @@ namespace Wombat.Network.Sockets
                 catch { }
                 try
                 {
-                    if (_tcpClient != null)
+                    if (_networkStream != null)
                     {
-                        _tcpClient.Close();
+                        _networkStream.Dispose();
+                    }
+                }
+                catch { }
+                try
+                {
+                    if (_socket != null)
+                    {
+                        // 关闭Socket
+                        if (_socket.Connected)
+                        {
+                            try { _socket.Shutdown(SocketShutdown.Both); } catch { }
+                            _socket.Close();
+                        }
+                        _socket.Dispose();
                     }
                 }
                 catch { }
@@ -670,7 +714,8 @@ namespace Wombat.Network.Sockets
             finally
             {
                 _stream = null;
-                _tcpClient = null;
+                _networkStream = null;
+                _socket = null;
                 
                 // 清空接收缓冲区
                 ClearReceiveBuffer();
@@ -1176,6 +1221,166 @@ namespace Wombat.Network.Sockets
             
             // 同步读取所有数据
             return ReadAllBytes();
+        }
+        
+        #endregion
+
+        #region Heartbeat Management
+
+        /// <summary>
+        /// 启动心跳机制
+        /// </summary>
+        private void StartHeartbeat()
+        {
+            if (!_configuration.EnableHeartbeat || _state != _connected)
+                return;
+
+            lock (_heartbeatLock)
+            {
+                StopHeartbeat(); // 确保停止之前的定时器
+                
+                _lastReceivedHeartbeatTime = DateTime.UtcNow;
+                _missedHeartbeats = 0;
+                
+                // 创建心跳定时器
+                _heartbeatTimer = new Timer(
+                    HeartbeatTimerCallback, 
+                    null, 
+                    _configuration.HeartbeatInterval, 
+                    _configuration.HeartbeatInterval);
+                
+                HeartbeatManager.LogHeartbeat(_logger, "启动客户端心跳，间隔: {0}秒", _configuration.HeartbeatInterval.TotalSeconds);
+            }
+        }
+
+        /// <summary>
+        /// 停止心跳机制
+        /// </summary>
+        private void StopHeartbeat()
+        {
+            lock (_heartbeatLock)
+            {
+                if (_heartbeatTimer != null)
+                {
+                    _heartbeatTimer.Dispose();
+                    _heartbeatTimer = null;
+                    HeartbeatManager.LogHeartbeat(_logger, "停止客户端心跳");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 心跳定时器回调
+        /// </summary>
+        private async void HeartbeatTimerCallback(object state)
+        {
+            if (_state != _connected)
+            {
+                StopHeartbeat();
+                return;
+            }
+            
+            try
+            {
+                // 检查是否需要发送心跳
+                await SendHeartbeatPacket();
+                
+                // 检查心跳超时
+                CheckHeartbeatTimeout();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "心跳处理中发生错误");
+            }
+        }
+
+        /// <summary>
+        /// 发送心跳包
+        /// </summary>
+        private async Task SendHeartbeatPacket()
+        {
+            try
+            {
+                if (_state != _connected)
+                    return;
+                    
+                byte[] heartbeatPacket = HeartbeatManager.CreateHeartbeatPacket();
+                await SendAsync(heartbeatPacket);
+                
+                HeartbeatManager.LogHeartbeat(_logger, "客户端发送心跳包到服务器: {0}", this.RemoteEndPoint);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "发送心跳包时发生错误");
+            }
+        }
+
+        /// <summary>
+        /// 处理接收到的心跳包
+        /// </summary>
+        private void ProcessHeartbeatPacket(byte[] data, int offset)
+        {
+            try
+            {
+                // 更新最后收到心跳的时间
+                lock (_heartbeatLock)
+                {
+                    _lastReceivedHeartbeatTime = DateTime.UtcNow;
+                    _missedHeartbeats = 0;
+                }
+                
+                // 提取心跳包时间戳，用于计算网络延迟
+                long timestamp = HeartbeatManager.ExtractTimestamp(data, offset);
+                if (timestamp > 0)
+                {
+                    long currentTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    long delay = currentTime - timestamp;
+                    
+                    HeartbeatManager.LogHeartbeat(_logger, "客户端收到服务器心跳包: {0}, 网络延迟: {1}ms", 
+                        this.RemoteEndPoint, delay);
+                }
+                else
+                {
+                    HeartbeatManager.LogHeartbeat(_logger, "客户端收到服务器心跳包: {0}", this.RemoteEndPoint);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "处理心跳包时发生错误");
+            }
+        }
+
+        /// <summary>
+        /// 检查心跳超时
+        /// </summary>
+        private void CheckHeartbeatTimeout()
+        {
+            if (!_configuration.EnableHeartbeat || _state != _connected)
+                return;
+                
+            lock (_heartbeatLock)
+            {
+                // 计算自上次接收心跳包以来的时间
+                TimeSpan elapsed = DateTime.UtcNow - _lastReceivedHeartbeatTime;
+                
+                // 如果超过心跳超时时间，增加计数
+                if (elapsed > _configuration.HeartbeatTimeout)
+                {
+                    _missedHeartbeats++;
+                    HeartbeatManager.LogHeartbeat(_logger, "客户端心跳超时，已连续 {0}/{1} 次未收到服务器心跳", 
+                        _missedHeartbeats, _configuration.MaxMissedHeartbeats);
+                    
+                    // 如果超过最大允许的心跳丢失次数，关闭连接
+                    if (_missedHeartbeats >= _configuration.MaxMissedHeartbeats)
+                    {
+                        HeartbeatManager.LogHeartbeat(_logger, "客户端心跳连续 {0} 次超时，关闭连接: {1}", 
+                            _missedHeartbeats, this.RemoteEndPoint);
+                            
+                        // 在后台线程中关闭连接，避免定时器回调中直接同步关闭
+                        Task.Run(async () => await Close(true));
+                    }
+                }
+            }
         }
         
         #endregion

@@ -13,13 +13,23 @@ namespace Wombat.Socket.TestTcpSocketServer
     {
 
         static TcpSocketServer _server;
+        static ILogger _logger;
+        static TcpSocketServerConfiguration _config;
 
         static void Main(string[] args)
         {
 
             try
             {
-                var config = new TcpSocketServerConfiguration();
+                // 配置日志记录器
+                ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
+                {
+                    builder.AddConsole();
+                    builder.SetMinimumLevel(LogLevel.Debug);
+                });
+                _logger = loggerFactory.CreateLogger<Program>();
+
+                _config = new TcpSocketServerConfiguration();
                 //config.UseSsl = true;
                 //config.SslServerCertificate = new System.Security.Cryptography.X509Certificates.X509Certificate2(@"D:\\Cowboy.pfx", "Cowboy");
                 //config.SslPolicyErrorsBypassed = false;
@@ -28,13 +38,31 @@ namespace Wombat.Socket.TestTcpSocketServer
                 //config.FrameBuilder = new RawBufferFrameBuilder();
                 //config.FrameBuilder = new LineBasedFrameBuilder();
                 //config.FrameBuilder = new LengthPrefixedFrameBuilder();
-                config.FrameBuilder = new LengthFieldBasedFrameBuilder();
+                _config.FrameBuilder = new LengthFieldBasedFrameBuilder();
 
-                _server = new TcpSocketServer(22222, new SimpleEventDispatcher(), config);
+                // 启用心跳
+                _config.EnableHeartbeat = true;
+                _config.HeartbeatInterval = TimeSpan.FromSeconds(10);  // 每10秒发送一次心跳
+                _config.HeartbeatTimeout = TimeSpan.FromSeconds(30);   // 30秒未收到心跳则超时
+                _config.MaxMissedHeartbeats = 3;                       // 允许最多3次心跳丢失
+
+                _server = new TcpSocketServer(22222, new SimpleEventDispatcher(), _config);
+                // 设置日志记录器
+                _server.UseLogger(_logger);
                 _server.Listen();
 
                 Console.WriteLine("TCP server has been started on [{0}].", _server.ListenedEndPoint);
                 Console.WriteLine("Type something to send to clients...");
+                Console.WriteLine("Special commands:");
+                Console.WriteLine("  quit - Exit the program");
+                Console.WriteLine("  heartbeat - Show heartbeat status");
+                Console.WriteLine("  heartbeat-on - Enable heartbeat (for new connections)");
+                Console.WriteLine("  heartbeat-off - Disable heartbeat (for new connections)");
+                Console.WriteLine("  heartbeat-interval <seconds> - Set heartbeat interval (for new connections)");
+                Console.WriteLine("  sessions - Show active client sessions");
+                Console.WriteLine("  session-info <sessionKey> - Show detailed session information");
+                Console.WriteLine("  close-session <sessionKey> - Close a specific session");
+
                 while (true)
                 {
                     try
@@ -42,6 +70,101 @@ namespace Wombat.Socket.TestTcpSocketServer
                         string text = Console.ReadLine();
                         if (text == "quit")
                             break;
+
+                        // 处理特殊命令
+                        if (text == "heartbeat")
+                        {
+                            Console.WriteLine("Heartbeat configuration:");
+                            Console.WriteLine($"  Enabled: {_config.EnableHeartbeat}");
+                            Console.WriteLine($"  Interval: {_config.HeartbeatInterval.TotalSeconds} seconds");
+                            Console.WriteLine($"  Timeout: {_config.HeartbeatTimeout.TotalSeconds} seconds");
+                            Console.WriteLine($"  Max Missed: {_config.MaxMissedHeartbeats}");
+                            Console.WriteLine("Heartbeat status is displayed in log messages.");
+                            continue;
+                        }
+                        else if (text == "heartbeat-on")
+                        {
+                            _config.EnableHeartbeat = true;
+                            Console.WriteLine("Heartbeat enabled for new connections");
+                            continue;
+                        }
+                        else if (text == "heartbeat-off")
+                        {
+                            _config.EnableHeartbeat = false;
+                            Console.WriteLine("Heartbeat disabled for new connections");
+                            continue;
+                        }
+                        else if (text.StartsWith("heartbeat-interval "))
+                        {
+                            string[] parts = text.Split(' ');
+                            if (parts.Length == 2 && int.TryParse(parts[1], out int seconds))
+                            {
+                                _config.HeartbeatInterval = TimeSpan.FromSeconds(seconds);
+                                Console.WriteLine($"Heartbeat interval set to {seconds} seconds for new connections");
+                            }
+                            else
+                            {
+                                Console.WriteLine("Invalid format. Use: heartbeat-interval <seconds>");
+                            }
+                            continue;
+                        }
+                        else if (text == "sessions")
+                        {
+                            Console.WriteLine($"Active sessions: {_server.SessionCount}");
+                            continue;
+                        }
+                        else if (text.StartsWith("session-info "))
+                        {
+                            string[] parts = text.Split(' ');
+                            if (parts.Length == 2)
+                            {
+                                string sessionKey = parts[1];
+                                var session = _server.GetSession(sessionKey);
+                                if (session != null)
+                                {
+                                    Console.WriteLine($"Session [{sessionKey}]:");
+                                    Console.WriteLine($"  Remote endpoint: {session.RemoteEndPoint}");
+                                    Console.WriteLine($"  Local endpoint: {session.LocalEndPoint}");
+                                    Console.WriteLine($"  State: {session.State}");
+                                    Console.WriteLine($"  Start time: {session.StartTime}");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"Session [{sessionKey}] not found");
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine("Invalid format. Use: session-info <sessionKey>");
+                            }
+                            continue;
+                        }
+                        else if (text.StartsWith("close-session "))
+                        {
+                            string[] parts = text.Split(' ');
+                            if (parts.Length == 2)
+                            {
+                                string sessionKey = parts[1];
+                                if (_server.HasSession(sessionKey))
+                                {
+                                    Task.Run(async () =>
+                                    {
+                                        await _server.CloseSession(sessionKey);
+                                        Console.WriteLine($"Session [{sessionKey}] closed");
+                                    });
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"Session [{sessionKey}] not found");
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine("Invalid format. Use: close-session <sessionKey>");
+                            }
+                            continue;
+                        }
+
                         Task.Run(async () =>
                         {
                             if (text == "many")
@@ -104,7 +227,7 @@ namespace Wombat.Socket.TestTcpSocketServer
                     }
                     catch (Exception ex)
                     {
-                        //Logger.Get<Program>().Error(ex.Message, ex);
+                        _logger?.LogError(ex, "Error processing command: {Message}", ex.Message);
                     }
                 }
 
@@ -113,7 +236,8 @@ namespace Wombat.Socket.TestTcpSocketServer
             }
             catch (Exception ex)
             {
-                //Logger.Get<Program>().Error(ex.Message, ex);
+                Console.WriteLine($"服务器异常: {ex.Message}");
+                _logger?.LogError(ex, "Server error: {Message}", ex.Message);
             }
 
             Console.ReadKey();

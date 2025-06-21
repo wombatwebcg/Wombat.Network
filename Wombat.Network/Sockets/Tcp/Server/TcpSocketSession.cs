@@ -33,6 +33,12 @@ namespace Wombat.Network.Sockets
         private const int _connecting = 1;
         private const int _connected = 2;
         private const int _disposed = 5;
+        
+        // 心跳相关字段
+        private Timer _heartbeatTimer;
+        private DateTime _lastReceivedHeartbeatTime;
+        private int _missedHeartbeats;
+        private readonly object _heartbeatLock = new object();
 
         #endregion
 
@@ -168,6 +174,12 @@ namespace Wombat.Network.Sockets
 
                 if (!isErrorOccurredInUserSide)
                 {
+                    // 启动心跳机制
+                    if (_configuration.EnableHeartbeat)
+                    {
+                        StartHeartbeat();
+                    }
+                    
                     await Process();
                 }
                 else
@@ -220,7 +232,17 @@ namespace Wombat.Network.Sockets
                         {
                             try
                             {
-                                await _dispatcher.OnSessionDataReceived(this, payload, payloadOffset, payloadCount);
+                                // 检查是否为心跳包
+                                if (HeartbeatManager.IsHeartbeatPacket(payload, payloadOffset, payloadCount))
+                                {
+                                    // 处理接收到的心跳包
+                                    ProcessHeartbeatPacket(payload, payloadOffset);
+                                }
+                                else
+                                {
+                                    // 处理正常数据包
+                                    await _dispatcher.OnSessionDataReceived(this, payload, payloadOffset, payloadCount);
+                                }
                             }
                             catch (Exception ex) // catch all exceptions from out-side
                             {
@@ -347,6 +369,167 @@ namespace Wombat.Network.Sockets
 
         #endregion
 
+        #region Heartbeat Management
+
+        /// <summary>
+        /// 启动心跳机制
+        /// </summary>
+        private void StartHeartbeat()
+        {
+            if (!_configuration.EnableHeartbeat || _state != _connected)
+                return;
+
+            lock (_heartbeatLock)
+            {
+                StopHeartbeat(); // 确保停止之前的定时器
+                
+                _lastReceivedHeartbeatTime = DateTime.UtcNow;
+                _missedHeartbeats = 0;
+                
+                // 创建心跳定时器
+                _heartbeatTimer = new Timer(
+                    HeartbeatTimerCallback, 
+                    null, 
+                    _configuration.HeartbeatInterval, 
+                    _configuration.HeartbeatInterval);
+                
+                HeartbeatManager.LogHeartbeat(_logger, "启动会话心跳，会话ID: {0}, 间隔: {1}秒", 
+                    SessionKey, _configuration.HeartbeatInterval.TotalSeconds);
+            }
+        }
+
+        /// <summary>
+        /// 停止心跳机制
+        /// </summary>
+        private void StopHeartbeat()
+        {
+            lock (_heartbeatLock)
+            {
+                if (_heartbeatTimer != null)
+                {
+                    _heartbeatTimer.Dispose();
+                    _heartbeatTimer = null;
+                    HeartbeatManager.LogHeartbeat(_logger, "停止会话心跳，会话ID: {0}", SessionKey);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 心跳定时器回调
+        /// </summary>
+        private async void HeartbeatTimerCallback(object state)
+        {
+            if (_state != _connected)
+            {
+                StopHeartbeat();
+                return;
+            }
+            
+            try
+            {
+                // 检查是否需要发送心跳
+                await SendHeartbeatPacket();
+                
+                // 检查心跳超时
+                CheckHeartbeatTimeout();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "会话心跳处理中发生错误，会话ID: {0}", SessionKey);
+            }
+        }
+
+        /// <summary>
+        /// 发送心跳包
+        /// </summary>
+        private async Task SendHeartbeatPacket()
+        {
+            try
+            {
+                if (_state != _connected)
+                    return;
+                    
+                byte[] heartbeatPacket = HeartbeatManager.CreateHeartbeatPacket();
+                await SendAsync(heartbeatPacket);
+                
+                HeartbeatManager.LogHeartbeat(_logger, "服务器发送心跳包到客户端会话: {0}", this.RemoteEndPoint);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "发送心跳包时发生错误，会话ID: {0}", SessionKey);
+            }
+        }
+
+        /// <summary>
+        /// 处理接收到的心跳包
+        /// </summary>
+        private void ProcessHeartbeatPacket(byte[] data, int offset)
+        {
+            try
+            {
+                // 更新最后收到心跳的时间
+                lock (_heartbeatLock)
+                {
+                    _lastReceivedHeartbeatTime = DateTime.UtcNow;
+                    _missedHeartbeats = 0;
+                }
+                
+                // 提取心跳包时间戳，用于计算网络延迟
+                long timestamp = HeartbeatManager.ExtractTimestamp(data, offset);
+                if (timestamp > 0)
+                {
+                    long currentTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    long delay = currentTime - timestamp;
+                    
+                    HeartbeatManager.LogHeartbeat(_logger, "服务器收到客户端心跳包，会话ID: {0}, 客户端: {1}, 网络延迟: {2}ms", 
+                        SessionKey, this.RemoteEndPoint, delay);
+                }
+                else
+                {
+                    HeartbeatManager.LogHeartbeat(_logger, "服务器收到客户端心跳包，会话ID: {0}", SessionKey);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "处理心跳包时发生错误，会话ID: {0}", SessionKey);
+            }
+        }
+
+        /// <summary>
+        /// 检查心跳超时
+        /// </summary>
+        private void CheckHeartbeatTimeout()
+        {
+            if (!_configuration.EnableHeartbeat || _state != _connected)
+                return;
+                
+            lock (_heartbeatLock)
+            {
+                // 计算自上次接收心跳包以来的时间
+                TimeSpan elapsed = DateTime.UtcNow - _lastReceivedHeartbeatTime;
+                
+                // 如果超过心跳超时时间，增加计数
+                if (elapsed > _configuration.HeartbeatTimeout)
+                {
+                    _missedHeartbeats++;
+                    HeartbeatManager.LogHeartbeat(_logger, "会话心跳超时，已连续 {0}/{1} 次未收到客户端心跳，会话ID: {2}", 
+                        _missedHeartbeats, _configuration.MaxMissedHeartbeats, SessionKey);
+                    
+                    // 如果超过最大允许的心跳丢失次数，关闭连接
+                    if (_missedHeartbeats >= _configuration.MaxMissedHeartbeats)
+                    {
+                        HeartbeatManager.LogHeartbeat(_logger, "会话心跳连续 {0} 次超时，关闭连接，会话ID: {1}", 
+                            _missedHeartbeats, SessionKey);
+                            
+                        // 在后台线程中关闭连接，避免定时器回调中直接同步关闭
+                        Task.Run(async () => await Close(true));
+                    }
+                }
+            }
+        }
+        
+        #endregion
+
         #region Close
 
         public async Task Close()
@@ -361,6 +544,9 @@ namespace Wombat.Network.Sockets
                 return;
             }
 
+            // 停止心跳检测
+            StopHeartbeat();
+            
             Shutdown();
 
             if (shallNotifyUserSide)

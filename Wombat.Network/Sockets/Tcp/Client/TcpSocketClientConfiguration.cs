@@ -45,6 +45,12 @@ namespace Wombat.Network.Sockets
             MaxConcurrentConnections = 100;
             MaxConcurrentOperations = 10;
             MaxReceiveBufferSize = 10240 * 1024; // 默认为10MB
+            
+            // 心跳相关配置
+            EnableHeartbeat = false;                   // 默认禁用应用层心跳
+            HeartbeatInterval = TimeSpan.FromSeconds(30); // 心跳发送间隔
+            HeartbeatTimeout = TimeSpan.FromSeconds(90); // 心跳接收超时时间
+            MaxMissedHeartbeats = 3;                   // 最大允许缺失心跳次数
         }
 
         public ISegmentBufferManager BufferManager { get; set; }
@@ -97,5 +103,25 @@ namespace Wombat.Network.Sockets
         /// 当数据量超过此值时，新数据将不再加入缓冲区
         /// </summary>
         public int MaxReceiveBufferSize { get; set; }
+        
+        /// <summary>
+        /// 是否启用应用层心跳包
+        /// </summary>
+        public bool EnableHeartbeat { get; set; }
+        
+        /// <summary>
+        /// 心跳包发送间隔
+        /// </summary>
+        public TimeSpan HeartbeatInterval { get; set; }
+        
+        /// <summary>
+        /// 心跳包超时时间，超过此时间未收到心跳则认为连接断开
+        /// </summary>
+        public TimeSpan HeartbeatTimeout { get; set; }
+        
+        /// <summary>
+        /// 最大允许缺失心跳次数，超过此次数未收到心跳则认为连接断开
+        /// </summary>
+        public int MaxMissedHeartbeats { get; set; }
     }
 }
