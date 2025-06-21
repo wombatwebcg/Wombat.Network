@@ -44,6 +44,7 @@ namespace Wombat.Network.Sockets
             EnablePipelineIo = true;
             MaxConcurrentConnections = 100;
             MaxConcurrentOperations = 10;
+            MaxReceiveBufferSize = 10240 * 1024; // 默认为10MB
         }
 
         public ISegmentBufferManager BufferManager { get; set; }
@@ -90,5 +91,11 @@ namespace Wombat.Network.Sockets
         /// 每个连接的最大并发操作数
         /// </summary>
         public int MaxConcurrentOperations { get; set; }
+        
+        /// <summary>
+        /// 接收数据缓冲区的最大大小（字节数）
+        /// 当数据量超过此值时，新数据将不再加入缓冲区
+        /// </summary>
+        public int MaxReceiveBufferSize { get; set; }
     }
 }

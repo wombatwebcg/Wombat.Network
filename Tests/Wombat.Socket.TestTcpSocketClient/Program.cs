@@ -75,6 +75,8 @@ namespace Wombat.Socket.TestTcpSocketClient
                                 text = new string('x', 1024 * 10);
                                 await _client.SendAsync(Encoding.UTF8.GetBytes(text), cancellationTokenSource.Token);
                                 Console.WriteLine("Client [{0}] send text -> [{1} Bytes].", _client.LocalEndPoint, text.Length);
+                                Thread.Sleep(2000);
+                                var read = _client.ReadAllBytes();
                             }
                             else if (text == "big100k")
                             {

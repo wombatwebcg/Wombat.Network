@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.Security;
@@ -34,6 +35,12 @@ namespace Wombat.Network.Sockets
         // 新增字段，用于异步处理
         private CancellationTokenSource _processCts;
         private Task _processTask;
+
+        // 新增字段，用于存储接收到的数据
+        private readonly ConcurrentQueue<byte[]> _dataQueue = new ConcurrentQueue<byte[]>();
+        private readonly AutoResetEvent _dataAvailableEvent = new AutoResetEvent(false);
+        private readonly object _dataLock = new object();
+        private long _totalBytesAvailable = 0;
 
         #endregion
 
@@ -145,6 +152,37 @@ namespace Wombat.Network.Sockets
         }
         public IPEndPoint RemoteEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.RemoteEndPoint : _remoteEndPoint; } }
         public IPEndPoint LocalEndPoint { get { return Connected ? (IPEndPoint)_tcpClient.Client.LocalEndPoint : _localEndPoint; } }
+
+        /// <summary>
+        /// 指示接收缓冲区是否已满
+        /// </summary>
+        public bool IsBufferFull
+        {
+            get
+            {
+                lock (_dataLock)
+                {
+                    return _totalBytesAvailable >= _configuration.MaxReceiveBufferSize;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 获取当前缓冲区使用率（百分比）
+        /// </summary>
+        public double BufferUsage
+        {
+            get
+            {
+                lock (_dataLock)
+                {
+                    if (_configuration.MaxReceiveBufferSize <= 0)
+                        return 0;
+                    
+                    return (double)_totalBytesAvailable / _configuration.MaxReceiveBufferSize * 100.0;
+                }
+            }
+        }
 
         public TcpSocketConnectionState State
         {
@@ -366,6 +404,25 @@ namespace Wombat.Network.Sockets
                             {
                                 try
                                 {
+                                    // 将接收到的数据复制到队列中
+                                    if (payload != null && payloadCount > 0)
+                                    {
+                                        byte[] dataCopy = new byte[payloadCount];
+                                        Buffer.BlockCopy(payload, payloadOffset, dataCopy, 0, payloadCount);
+                                        
+                                        lock (_dataLock)
+                                        {
+                                            // 检查缓冲区是否已满
+                                            if (_totalBytesAvailable + dataCopy.Length <= _configuration.MaxReceiveBufferSize)
+                                            {
+                                                _dataQueue.Enqueue(dataCopy);
+                                                _totalBytesAvailable += dataCopy.Length;
+                                                _dataAvailableEvent.Set(); // 发出信号，表示有数据可用
+                                            }
+
+                                        }
+                                    }
+                                    
                                     // 使用操作超时
                                     using (var dispatchCts = new CancellationTokenSource(_configuration.OperationTimeout))
                                     using (var dispatchLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(dispatchCts.Token, cancellationToken))
@@ -614,6 +671,18 @@ namespace Wombat.Network.Sockets
             {
                 _stream = null;
                 _tcpClient = null;
+                
+                // 清空接收缓冲区
+                ClearReceiveBuffer();
+                
+                // 确保取消任何正在进行的处理
+                try
+                {
+                    _processCts?.Cancel();
+                    _processCts?.Dispose();
+                    _processCts = null;
+                }
+                catch { }
             }
 
             if (_receiveBuffer != default(ArraySegment<byte>))
@@ -747,6 +816,368 @@ namespace Wombat.Network.Sockets
             }
         }
 
+        #endregion
+
+        #region Data Reading
+
+        /// <summary>
+        /// 获取可读取的字节数
+        /// </summary>
+        public int BytesAvailable
+        {
+            get
+            {
+                lock (_dataLock)
+                {
+                    return (int)Math.Min(_totalBytesAvailable, int.MaxValue);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 读取接收到的数据，如果没有数据可用，则阻塞直到有数据到达或超时
+        /// </summary>
+        /// <param name="buffer">存储读取数据的缓冲区</param>
+        /// <param name="offset">缓冲区中的偏移量</param>
+        /// <param name="count">要读取的最大字节数</param>
+        /// <param name="timeout">超时时间，如果为null则使用配置的接收超时</param>
+        /// <returns>实际读取的字节数</returns>
+        public int Read(byte[] buffer, int offset, int count, TimeSpan? timeout = null)
+        {
+            BufferValidator.ValidateBuffer(buffer, offset, count, "buffer");
+            
+            if (State != TcpSocketConnectionState.Connected)
+            {
+                throw new InvalidOperationException("This client has not connected to server.");
+            }
+            
+            // 使用默认超时或指定的超时
+            TimeSpan actualTimeout = timeout ?? _configuration.ReceiveTimeout;
+            
+            // 如果没有数据可用，等待数据到达
+            if (BytesAvailable == 0)
+            {
+                if (!_dataAvailableEvent.WaitOne(actualTimeout))
+                {
+                    return 0; // 超时，没有数据可用
+                }
+            }
+            
+            int totalRead = 0;
+            
+            lock (_dataLock)
+            {
+                while (totalRead < count && _dataQueue.Count > 0)
+                {
+                    if (_dataQueue.TryPeek(out byte[] data))
+                    {
+                        int bytesToRead = Math.Min(count - totalRead, data.Length);
+                        Buffer.BlockCopy(data, 0, buffer, offset + totalRead, bytesToRead);
+                        totalRead += bytesToRead;
+                        
+                        // 如果完全读取了这个数据块
+                        if (bytesToRead == data.Length)
+                        {
+                            _dataQueue.TryDequeue(out _); // 移除已读数据块
+                            _totalBytesAvailable -= data.Length;
+                        }
+                        else
+                        {
+                            // 如果只读取了部分数据，创建新的数据块保存剩余数据
+                            byte[] remainingData = new byte[data.Length - bytesToRead];
+                            Buffer.BlockCopy(data, bytesToRead, remainingData, 0, remainingData.Length);
+                            
+                            _dataQueue.TryDequeue(out _); // 移除原始数据块
+                            _dataQueue.Enqueue(remainingData); // 将剩余数据重新入队
+                            _totalBytesAvailable -= bytesToRead;
+                            
+                            break; // 已读取所需的字节数
+                        }
+                    }
+                }
+            }
+            
+            return totalRead;
+        }
+
+        /// <summary>
+        /// 异步读取接收到的数据
+        /// </summary>
+        /// <param name="buffer">存储读取数据的缓冲区</param>
+        /// <param name="offset">缓冲区中的偏移量</param>
+        /// <param name="count">要读取的最大字节数</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>实际读取的字节数</returns>
+        public async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken = default)
+        {
+            BufferValidator.ValidateBuffer(buffer, offset, count, "buffer");
+            
+            if (State != TcpSocketConnectionState.Connected)
+            {
+                throw new InvalidOperationException("This client has not connected to server.");
+            }
+            
+            // 如果已有数据可用，立即读取
+            if (BytesAvailable > 0)
+            {
+                return Read(buffer, offset, count);
+            }
+            
+            // 创建任务完成源
+            TaskCompletionSource<bool> tcs = new TaskCompletionSource<bool>();
+            CancellationTokenRegistration registration = default;
+            
+            try
+            {
+                // 注册取消令牌
+                if (cancellationToken.CanBeCanceled)
+                {
+                    registration = cancellationToken.Register(() => tcs.TrySetCanceled());
+                }
+                
+                // 等待数据可用或取消
+                ThreadPool.RegisterWaitForSingleObject(
+                    _dataAvailableEvent, 
+                    (state, timedOut) => 
+                    {
+                        var source = state as TaskCompletionSource<bool>;
+                        if (source != null)
+                        {
+                            source.TrySetResult(!timedOut);
+                        }
+                    }, 
+                    tcs, 
+                    _configuration.ReceiveTimeout, 
+                    true);
+                
+                // 等待数据可用、取消或超时
+                bool dataAvailable;
+                try
+                {
+                    dataAvailable = await tcs.Task;
+                }
+                catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw; // 重新抛出取消异常
+                }
+                
+                if (!dataAvailable)
+                {
+                    return 0; // 超时，没有数据可用
+                }
+                
+                // 有数据可用，读取数据
+                return Read(buffer, offset, count);
+            }
+            finally
+            {
+                registration.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// 清空接收缓冲区
+        /// </summary>
+        /// <returns>释放的字节数</returns>
+        public int ClearReceiveBuffer()
+        {
+            lock (_dataLock)
+            {
+                int released = (int)_totalBytesAvailable;
+                while (_dataQueue.TryDequeue(out _)) { }
+                _totalBytesAvailable = 0;
+                return released;
+            }
+        }
+
+        /// <summary>
+        /// 释放指定百分比的缓冲区空间，保留最新的数据
+        /// </summary>
+        /// <param name="percentage">要释放的缓冲区百分比（0.0-100.0）</param>
+        /// <returns>实际释放的字节数</returns>
+        public int ReleaseBuffer(double percentage)
+        {
+            if (percentage <= 0)
+                return 0;
+                
+            if (percentage >= 100)
+                return ClearReceiveBuffer();
+                
+            lock (_dataLock)
+            {
+                if (_totalBytesAvailable == 0)
+                    return 0;
+                    
+                long bytesToRelease = (long)(_totalBytesAvailable * percentage / 100.0);
+                return ReleaseBufferBytes((int)bytesToRelease);
+            }
+        }
+        
+        /// <summary>
+        /// 释放指定字节数的缓冲区空间，保留最新的数据
+        /// </summary>
+        /// <param name="bytes">要释放的字节数</param>
+        /// <returns>实际释放的字节数</returns>
+        public int ReleaseBufferBytes(int bytes)
+        {
+            if (bytes <= 0)
+                return 0;
+                
+            lock (_dataLock)
+            {
+                if (_totalBytesAvailable == 0)
+                    return 0;
+                    
+                int releasedBytes = 0;
+                while (releasedBytes < bytes && _dataQueue.Count > 0)
+                {
+                    if (_dataQueue.TryPeek(out byte[] oldestData))
+                    {
+                        if (releasedBytes + oldestData.Length <= bytes)
+                        {
+                            // 可以完全释放这个数据块
+                            _dataQueue.TryDequeue(out _);
+                            releasedBytes += oldestData.Length;
+                            _totalBytesAvailable -= oldestData.Length;
+                        }
+                        else
+                        {
+                            // 只需要释放部分数据
+                            int bytesToKeep = oldestData.Length - (bytes - releasedBytes);
+                            byte[] remainingData = new byte[bytesToKeep];
+                            Buffer.BlockCopy(oldestData, oldestData.Length - bytesToKeep, remainingData, 0, bytesToKeep);
+                            
+                            _dataQueue.TryDequeue(out _); // 移除原始数据块
+                            _dataQueue.Enqueue(remainingData); // 将剩余数据重新入队
+                            _totalBytesAvailable -= (bytes - releasedBytes);
+                            releasedBytes = bytes;
+                            break;
+                        }
+                    }
+                }
+                
+                return releasedBytes;
+            }
+        }
+        
+        /// <summary>
+        /// 读取缓冲区中的所有数据并清空缓冲区
+        /// </summary>
+        /// <returns>包含缓冲区中所有数据的字节数组</returns>
+        public byte[] ReadAllBytes()
+        {
+            lock (_dataLock)
+            {
+                if (_totalBytesAvailable == 0)
+                    return new byte[0];
+                
+                // 创建一个足够大的缓冲区来存储所有数据
+                byte[] result = new byte[(int)_totalBytesAvailable];
+                int offset = 0;
+                
+                // 复制所有数据块到结果数组
+                while (_dataQueue.Count > 0)
+                {
+                    if (_dataQueue.TryDequeue(out byte[] data))
+                    {
+                        Buffer.BlockCopy(data, 0, result, offset, data.Length);
+                        offset += data.Length;
+                    }
+                }
+                
+                // 重置缓冲区
+                _totalBytesAvailable = 0;
+                
+                return result;
+            }
+        }
+        
+        /// <summary>
+        /// 读取缓冲区中的所有数据但不清空缓冲区
+        /// </summary>
+        /// <returns>包含缓冲区中所有数据的字节数组</returns>
+        public byte[] PeekAllBytes()
+        {
+            lock (_dataLock)
+            {
+                if (_totalBytesAvailable == 0)
+                    return new byte[0];
+                
+                // 创建一个足够大的缓冲区来存储所有数据
+                byte[] result = new byte[(int)_totalBytesAvailable];
+                int offset = 0;
+                
+                // 遍历队列并复制数据但不移除
+                foreach (byte[] data in _dataQueue)
+                {
+                    Buffer.BlockCopy(data, 0, result, offset, data.Length);
+                    offset += data.Length;
+                }
+                
+                return result;
+            }
+        }
+        
+        /// <summary>
+        /// 异步读取缓冲区中的所有数据并清空缓冲区
+        /// </summary>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>包含缓冲区中所有数据的字节数组</returns>
+        public async Task<byte[]> ReadAllBytesAsync(CancellationToken cancellationToken = default)
+        {
+            // 如果没有数据可读且未取消，则等待数据
+            if (BytesAvailable == 0)
+            {
+                TaskCompletionSource<bool> tcs = new TaskCompletionSource<bool>();
+                CancellationTokenRegistration registration = default;
+                
+                try
+                {
+                    // 注册取消令牌
+                    if (cancellationToken.CanBeCanceled)
+                    {
+                        registration = cancellationToken.Register(() => tcs.TrySetCanceled());
+                    }
+                    
+                    // 等待数据可用或取消
+                    ThreadPool.RegisterWaitForSingleObject(
+                        _dataAvailableEvent, 
+                        (state, timedOut) => 
+                        {
+                            var source = state as TaskCompletionSource<bool>;
+                            if (source != null)
+                            {
+                                source.TrySetResult(!timedOut);
+                            }
+                        }, 
+                        tcs, 
+                        _configuration.ReceiveTimeout, 
+                        true);
+                    
+                    // 等待数据可用、取消或超时
+                    try
+                    {
+                        bool dataAvailable = await tcs.Task;
+                        if (!dataAvailable)
+                        {
+                            return new byte[0]; // 超时，没有数据可用
+                        }
+                    }
+                    catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw; // 重新抛出取消异常
+                    }
+                }
+                finally
+                {
+                    registration.Dispose();
+                }
+            }
+            
+            // 同步读取所有数据
+            return ReadAllBytes();
+        }
+        
         #endregion
     }
 }
