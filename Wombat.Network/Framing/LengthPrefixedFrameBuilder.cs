@@ -2,50 +2,93 @@
 
 namespace Wombat.Network
 {
-    // A high-level overview of the framing is given in the following figure. 
-    //  0                   1                   2                   3
-    //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    // +-+-------------+-----------------------------------------------+
-    // |M| Payload len |    Extended payload length                    |
-    // |A|     (7)     |             (16/64)                           |
-    // |S|             |   (if payload len==126/127)                   |
-    // |K|             |                                               |
-    // +-+-------------+- - - - - - - - - - - - - - - - - - - - - - - -+
-    // |     Extended payload length continued, if payload len == 127  |
-    // + - - - - - - - + - - - - - - - - - - - - - - - - - - - - - - - +
-    // |               |    Masking-key, if MASK set to 1              |
-    // +---------------+- - - - - - - - - - - - - - - - - - - - - - - -+
-    // |               |          Payload Data                         :
-    // +----------------- - - - - - - - - - - - - - - - - - - - - - - -+
-    // :                     Payload Data continued ...                :
-    // + - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
-    // |                     Payload Data continued ...                |
-    // +---------------------------------------------------------------+
+    /// <summary>
+    /// 长度前缀帧构建器，使用类似WebSocket的帧格式，支持可选的数据掩码。
+    /// </summary>
+    /// <remarks>
+    /// 帧格式概述：
+    /// <code>
+    ///  0                   1                   2                   3
+    ///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    /// +-+-------------+-----------------------------------------------+
+    /// |M| Payload len |    Extended payload length                    |
+    /// |A|     (7)     |             (16/64)                           |
+    /// |S|             |   (if payload len==126/127)                   |
+    /// |K|             |                                               |
+    /// +-+-------------+- - - - - - - - - - - - - - - - - - - - - - - -+
+    /// |     Extended payload length continued, if payload len == 127  |
+    /// + - - - - - - - + - - - - - - - - - - - - - - - - - - - - - - - +
+    /// |               |    Masking-key, if MASK set to 1              |
+    /// +---------------+- - - - - - - - - - - - - - - - - - - - - - - -+
+    /// |               |          Payload Data                         :
+    /// +----------------- - - - - - - - - - - - - - - - - - - - - - - -+
+    /// :                     Payload Data continued ...                :
+    /// + - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
+    /// |                     Payload Data continued ...                |
+    /// +---------------------------------------------------------------+
+    /// </code>
+    /// </remarks>
     public sealed class LengthPrefixedFrameBuilder : FrameBuilder
     {
+        /// <summary>
+        /// 初始化 <see cref="LengthPrefixedFrameBuilder"/> 类的新实例。
+        /// </summary>
+        /// <param name="isMasked">指示是否对数据进行掩码处理。</param>
         public LengthPrefixedFrameBuilder(bool isMasked = false)
             : this(new LengthPrefixedFrameEncoder(isMasked), new LengthPrefixedFrameDecoder(isMasked))
         {
         }
 
+        /// <summary>
+        /// 初始化 <see cref="LengthPrefixedFrameBuilder"/> 类的新实例。
+        /// </summary>
+        /// <param name="encoder">用于编码帧的编码器。</param>
+        /// <param name="decoder">用于解码帧的解码器。</param>
         public LengthPrefixedFrameBuilder(LengthPrefixedFrameEncoder encoder, LengthPrefixedFrameDecoder decoder)
             : base(encoder, decoder)
         {
         }
     }
 
+    /// <summary>
+    /// 长度前缀帧编码器，将数据编码为带长度前缀的帧格式，支持可选的数据掩码。
+    /// </summary>
     public sealed class LengthPrefixedFrameEncoder : IFrameEncoder
     {
         private static readonly Random _rng = new Random(DateTime.UtcNow.Millisecond);
         private static readonly int MaskingKeyLength = 4;
 
+        /// <summary>
+        /// 初始化 <see cref="LengthPrefixedFrameEncoder"/> 类的新实例。
+        /// </summary>
+        /// <param name="isMasked">指示是否对数据进行掩码处理。</param>
         public LengthPrefixedFrameEncoder(bool isMasked = false)
         {
             IsMasked = isMasked;
         }
 
+        /// <summary>
+        /// 获取一个值，指示是否对数据进行掩码处理。
+        /// </summary>
         public bool IsMasked { get; private set; }
 
+        /// <summary>
+        /// 将指定的数据编码为长度前缀帧格式。
+        /// </summary>
+        /// <param name="payload">要编码的原始数据。</param>
+        /// <param name="offset">数据的起始偏移量。</param>
+        /// <param name="count">要编码的数据长度。</param>
+        /// <param name="frameBuffer">输出参数，编码后的帧数据缓冲区。</param>
+        /// <param name="frameBufferOffset">输出参数，帧数据在缓冲区中的起始偏移量。</param>
+        /// <param name="frameBufferLength">输出参数，帧数据的总长度。</param>
+        /// <remarks>
+        /// 帧长度编码规则：
+        /// <list type="bullet">
+        /// <item><description>0-125：直接使用7位表示长度</description></item>
+        /// <item><description>126：使用2字节表示长度</description></item>
+        /// <item><description>127：使用8字节表示长度</description></item>
+        /// </list>
+        /// </remarks>
         public void EncodeFrame(byte[] payload, int offset, int count, out byte[] frameBuffer, out int frameBufferOffset, out int frameBufferLength)
         {
             var buffer = Encode(payload, offset, count, IsMasked);
@@ -55,6 +98,14 @@ namespace Wombat.Network
             frameBufferLength = buffer.Length;
         }
 
+        /// <summary>
+        /// 编码数据为长度前缀帧格式的内部实现。
+        /// </summary>
+        /// <param name="payload">要编码的原始数据。</param>
+        /// <param name="offset">数据的起始偏移量。</param>
+        /// <param name="count">要编码的数据长度。</param>
+        /// <param name="isMasked">指示是否对数据进行掩码处理。</param>
+        /// <returns>编码后的帧数据。</returns>
         private static byte[] Encode(byte[] payload, int offset, int count, bool isMasked = false)
         {
             byte[] fragment;
@@ -128,17 +179,38 @@ namespace Wombat.Network
         }
     }
 
+    /// <summary>
+    /// 长度前缀帧解码器，从长度前缀帧格式中解码数据，支持可选的数据掩码。
+    /// </summary>
     public sealed class LengthPrefixedFrameDecoder : IFrameDecoder
     {
         private static readonly int MaskingKeyLength = 4;
 
+        /// <summary>
+        /// 初始化 <see cref="LengthPrefixedFrameDecoder"/> 类的新实例。
+        /// </summary>
+        /// <param name="isMasked">指示是否对数据进行掩码处理。</param>
         public LengthPrefixedFrameDecoder(bool isMasked = false)
         {
             IsMasked = isMasked;
         }
 
+        /// <summary>
+        /// 获取一个值，指示是否对数据进行掩码处理。
+        /// </summary>
         public bool IsMasked { get; private set; }
 
+        /// <summary>
+        /// 尝试从指定的缓冲区中解码出一个完整的长度前缀帧。
+        /// </summary>
+        /// <param name="buffer">包含待解码数据的缓冲区。</param>
+        /// <param name="offset">缓冲区中数据的起始偏移量。</param>
+        /// <param name="count">缓冲区中可用数据的长度。</param>
+        /// <param name="frameLength">输出参数，解码的帧的总长度（包括帧头）。</param>
+        /// <param name="payload">输出参数，解码后的原始数据。</param>
+        /// <param name="payloadOffset">输出参数，原始数据在输出缓冲区中的起始偏移量。</param>
+        /// <param name="payloadCount">输出参数，原始数据的长度。</param>
+        /// <returns>如果成功解码出完整帧则返回 <c>true</c>，否则返回 <c>false</c>。</returns>
         public bool TryDecodeFrame(byte[] buffer, int offset, int count, out int frameLength, out byte[] payload, out int payloadOffset, out int payloadCount)
         {
             frameLength = 0;
@@ -170,13 +242,35 @@ namespace Wombat.Network
             return false;
         }
 
+        /// <summary>
+        /// 表示帧头信息的内部类。
+        /// </summary>
         internal sealed class Header
         {
+            /// <summary>
+            /// 获取或设置一个值，指示数据是否被掩码。
+            /// </summary>
             public bool IsMasked { get; set; }
+            
+            /// <summary>
+            /// 获取或设置载荷数据的长度。
+            /// </summary>
             public int PayloadLength { get; set; }
+            
+            /// <summary>
+            /// 获取或设置掩码键的偏移量。
+            /// </summary>
             public int MaskingKeyOffset { get; set; }
+            
+            /// <summary>
+            /// 获取或设置帧头的长度。
+            /// </summary>
             public int Length { get; set; }
 
+            /// <summary>
+            /// 返回当前帧头的字符串表示形式。
+            /// </summary>
+            /// <returns>包含帧头信息的字符串。</returns>
             public override string ToString()
             {
                 return string.Format("IsMasked[{0}], PayloadLength[{1}], MaskingKeyOffset[{2}], Length[{3}]",
@@ -184,6 +278,13 @@ namespace Wombat.Network
             }
         }
 
+        /// <summary>
+        /// 解码帧头信息。
+        /// </summary>
+        /// <param name="buffer">包含帧数据的缓冲区。</param>
+        /// <param name="offset">数据的起始偏移量。</param>
+        /// <param name="count">可用数据的长度。</param>
+        /// <returns>解码后的帧头信息，如果数据不足则返回 <c>null</c>。</returns>
         private static Header DecodeHeader(byte[] buffer, int offset, int count)
         {
             if (count < 1)

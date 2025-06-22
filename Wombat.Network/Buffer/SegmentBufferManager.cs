@@ -36,6 +36,10 @@ namespace Wombat.Network
         private readonly List<byte[]> _segments;
         private readonly object _creatingNewSegmentLock = new object();
 
+        /// <summary>
+        /// 获取默认的分段缓冲区管理器实例。
+        /// </summary>
+        /// <value>默认配置为1024个1KB缓冲区的管理器实例。</value>
         public static SegmentBufferManager Default
         {
             get
@@ -47,6 +51,11 @@ namespace Wombat.Network
             }
         }
 
+        /// <summary>
+        /// 设置默认的分段缓冲区管理器。
+        /// </summary>
+        /// <param name="manager">要设置的管理器实例。</param>
+        /// <exception cref="ArgumentNullException">当 <paramref name="manager"/> 为 <c>null</c> 时引发。</exception>
         public static void SetDefaultBufferManager(SegmentBufferManager manager)
         {
             if (manager == null)
@@ -54,44 +63,71 @@ namespace Wombat.Network
             _defaultBufferManager = manager;
         }
 
+        /// <summary>
+        /// 获取每个缓冲区块的大小（以字节为单位）。
+        /// </summary>
         public int ChunkSize
         {
             get { return _chunkSize; }
         }
 
+        /// <summary>
+        /// 获取当前内存段的数量。
+        /// </summary>
         public int SegmentsCount
         {
             get { return _segments.Count; }
         }
 
+        /// <summary>
+        /// 获取每个内存段包含的缓冲区块数量。
+        /// </summary>
         public int SegmentChunksCount
         {
             get { return _segmentChunks; }
         }
 
+        /// <summary>
+        /// 获取当前可用的缓冲区块数量。
+        /// </summary>
         public int AvailableBuffers
         {
             get { return _buffers.Count; }
         }
 
+        /// <summary>
+        /// 获取所有内存段的总大小（以字节为单位）。
+        /// </summary>
         public int TotalBufferSize
         {
             get { return _segments.Count * _segmentSize; }
         }
 
+        /// <summary>
+        /// 初始化 <see cref="SegmentBufferManager"/> 类的新实例。
+        /// </summary>
+        /// <param name="segmentChunks">每个内存段包含的缓冲区块数量。</param>
+        /// <param name="chunkSize">每个缓冲区块的大小（以字节为单位）。</param>
         public SegmentBufferManager(int segmentChunks, int chunkSize)
             : this(segmentChunks, chunkSize, 1) { }
 
+        /// <summary>
+        /// 初始化 <see cref="SegmentBufferManager"/> 类的新实例。
+        /// </summary>
+        /// <param name="segmentChunks">每个内存段包含的缓冲区块数量。</param>
+        /// <param name="chunkSize">每个缓冲区块的大小（以字节为单位）。</param>
+        /// <param name="initialSegments">初始创建的内存段数量。</param>
         public SegmentBufferManager(int segmentChunks, int chunkSize, int initialSegments)
             : this(segmentChunks, chunkSize, initialSegments, true) { }
 
         /// <summary>
-        /// Constructs a new <see cref="SegmentBufferManager"></see> object
+        /// 初始化 <see cref="SegmentBufferManager"/> 类的新实例。
         /// </summary>
-        /// <param name="segmentChunks">The number of chunks to create per segment</param>
-        /// <param name="chunkSize">The size of a chunk in bytes</param>
-        /// <param name="initialSegments">The initial number of segments to create</param>
-        /// <param name="allowedToCreateMemory">If false when empty and checkout is called an exception will be thrown</param>
+        /// <param name="segmentChunks">每个内存段包含的缓冲区块数量。</param>
+        /// <param name="chunkSize">每个缓冲区块的大小（以字节为单位）。</param>
+        /// <param name="initialSegments">初始创建的内存段数量。</param>
+        /// <param name="allowedToCreateMemory">指示当缓冲区不足时是否允许创建新的内存段。如果为 <c>false</c>，则在缓冲区不足时会引发异常。</param>
+        /// <exception cref="ArgumentException">当 <paramref name="segmentChunks"/>、<paramref name="chunkSize"/> 小于或等于0，或 <paramref name="initialSegments"/> 小于0时引发。</exception>
         public SegmentBufferManager(int segmentChunks, int chunkSize, int initialSegments, bool allowedToCreateMemory)
         {
             if (segmentChunks <= 0)
@@ -115,6 +151,11 @@ namespace Wombat.Network
             _allowedToCreateMemory = allowedToCreateMemory;
         }
 
+        /// <summary>
+        /// 创建新的内存段并将其分割为缓冲区块。
+        /// </summary>
+        /// <param name="forceCreation">指示是否强制创建新段，即使当前可用缓冲区足够。</param>
+        /// <exception cref="UnableToCreateMemoryException">当不允许创建内存时引发。</exception>
         private void CreateNewSegment(bool forceCreation)
         {
             if (!_allowedToCreateMemory)
@@ -135,6 +176,11 @@ namespace Wombat.Network
             }
         }
 
+        /// <summary>
+        /// 借用一个缓冲区块。
+        /// </summary>
+        /// <returns>可用的缓冲区块。</returns>
+        /// <exception cref="UnableToAllocateBufferException">当经过多次尝试后仍无法分配缓冲区时引发。</exception>
         public ArraySegment<byte> BorrowBuffer()
         {
             int trial = 0;
@@ -149,6 +195,12 @@ namespace Wombat.Network
             throw new UnableToAllocateBufferException();
         }
 
+        /// <summary>
+        /// 借用指定数量的缓冲区块。
+        /// </summary>
+        /// <param name="count">要借用的缓冲区块数量。</param>
+        /// <returns>包含指定数量缓冲区块的集合。</returns>
+        /// <exception cref="UnableToAllocateBufferException">当经过多次尝试后仍无法分配足够缓冲区时引发。</exception>
         public IEnumerable<ArraySegment<byte>> BorrowBuffers(int count)
         {
             var result = new ArraySegment<byte>[count];
@@ -182,6 +234,10 @@ namespace Wombat.Network
             }
         }
 
+        /// <summary>
+        /// 归还一个缓冲区块，使其可以被重新使用。
+        /// </summary>
+        /// <param name="buffer">要归还的缓冲区块。</param>
         public void ReturnBuffer(ArraySegment<byte> buffer)
         {
             if (ValidateBuffer(buffer))
@@ -190,6 +246,11 @@ namespace Wombat.Network
             }
         }
 
+        /// <summary>
+        /// 归还多个缓冲区块，使其可以被重新使用。
+        /// </summary>
+        /// <param name="buffers">要归还的缓冲区块集合。</param>
+        /// <exception cref="ArgumentNullException">当 <paramref name="buffers"/> 为 <c>null</c> 时引发。</exception>
         public void ReturnBuffers(IEnumerable<ArraySegment<byte>> buffers)
         {
             if (buffers == null)
@@ -204,6 +265,11 @@ namespace Wombat.Network
             }
         }
 
+        /// <summary>
+        /// 归还多个缓冲区块，使其可以被重新使用。
+        /// </summary>
+        /// <param name="buffers">要归还的缓冲区块数组。</param>
+        /// <exception cref="ArgumentNullException">当 <paramref name="buffers"/> 为 <c>null</c> 时引发。</exception>
         public void ReturnBuffers(params ArraySegment<byte>[] buffers)
         {
             if (buffers == null)
@@ -218,6 +284,11 @@ namespace Wombat.Network
             }
         }
 
+        /// <summary>
+        /// 验证缓冲区块是否有效。
+        /// </summary>
+        /// <param name="buffer">要验证的缓冲区块。</param>
+        /// <returns>如果缓冲区块有效则返回 <c>true</c>，否则返回 <c>false</c>。</returns>
         private bool ValidateBuffer(ArraySegment<byte> buffer)
         {
             if (buffer.Array == null || buffer.Count == 0 || buffer.Array.Length < buffer.Offset + buffer.Count)

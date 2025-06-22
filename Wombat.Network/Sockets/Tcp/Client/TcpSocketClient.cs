@@ -37,11 +37,12 @@ namespace Wombat.Network.Sockets
         private CancellationTokenSource _processCts;
         private Task _processTask;
 
-        // 新增字段，用于存储接收到的数据
-        private readonly ConcurrentQueue<byte[]> _dataQueue = new ConcurrentQueue<byte[]>();
+        // 字段，用于存储最后一次接收到的数据
+        private byte[] _lastReceivedData;
+        private int _lastDataLength = 0;
+        private int _readOffset = 0; // 当前读取偏移量
         private readonly AutoResetEvent _dataAvailableEvent = new AutoResetEvent(false);
         private readonly object _dataLock = new object();
-        private long _totalBytesAvailable = 0;
         
         // 心跳相关字段
         private Timer _heartbeatTimer;
@@ -168,7 +169,8 @@ namespace Wombat.Network.Sockets
             {
                 lock (_dataLock)
                 {
-                    return _totalBytesAvailable >= _configuration.MaxReceiveBufferSize;
+                    int availableBytes = Math.Max(0, _lastDataLength - _readOffset);
+                    return availableBytes >= _configuration.MaxReceiveBufferSize;
                 }
             }
         }
@@ -185,7 +187,8 @@ namespace Wombat.Network.Sockets
                     if (_configuration.MaxReceiveBufferSize <= 0)
                         return 0;
                     
-                    return (double)_totalBytesAvailable / _configuration.MaxReceiveBufferSize * 100.0;
+                    int availableBytes = Math.Max(0, _lastDataLength - _readOffset);
+                    return (double)availableBytes / _configuration.MaxReceiveBufferSize * 100.0;
                 }
             }
         }
@@ -426,22 +429,17 @@ namespace Wombat.Network.Sockets
                                     }
                                     else
                                     {
-                                        // 将接收到的数据复制到队列中
+                                        // 存储最后一次接收到的数据
                                         if (payload != null && payloadCount > 0)
                                         {
-                                            byte[] dataCopy = new byte[payloadCount];
-                                            Buffer.BlockCopy(payload, payloadOffset, dataCopy, 0, payloadCount);
-                                            
                                             lock (_dataLock)
                                             {
-                                                // 检查缓冲区是否已满
-                                                if (_totalBytesAvailable + dataCopy.Length <= _configuration.MaxReceiveBufferSize)
-                                                {
-                                                    _dataQueue.Enqueue(dataCopy);
-                                                    _totalBytesAvailable += dataCopy.Length;
-                                                    _dataAvailableEvent.Set(); // 发出信号，表示有数据可用
-                                                }
-
+                                                // 只保存最后一次的数据，替换之前的数据
+                                                _lastReceivedData = new byte[payloadCount];
+                                                Buffer.BlockCopy(payload, payloadOffset, _lastReceivedData, 0, payloadCount);
+                                                _lastDataLength = payloadCount;
+                                                _readOffset = 0; // 重置读取偏移量
+                                                _dataAvailableEvent.Set(); // 发出信号，表示有数据可用
                                             }
                                         }
                                         
@@ -874,7 +872,7 @@ namespace Wombat.Network.Sockets
             {
                 lock (_dataLock)
                 {
-                    return (int)Math.Min(_totalBytesAvailable, int.MaxValue);
+                    return Math.Max(0, _lastDataLength - _readOffset);
                 }
             }
         }
@@ -912,32 +910,25 @@ namespace Wombat.Network.Sockets
             
             lock (_dataLock)
             {
-                while (totalRead < count && _dataQueue.Count > 0)
+                if (_lastReceivedData != null && _lastDataLength > _readOffset)
                 {
-                    if (_dataQueue.TryPeek(out byte[] data))
+                    // 计算可读取的字节数（从当前偏移位置开始）
+                    int availableBytes = _lastDataLength - _readOffset;
+                    int bytesToRead = Math.Min(count, availableBytes);
+                    
+                    // 从偏移位置开始复制数据
+                    Buffer.BlockCopy(_lastReceivedData, _readOffset, buffer, offset, bytesToRead);
+                    totalRead = bytesToRead;
+                    
+                    // 更新读取偏移量
+                    _readOffset += bytesToRead;
+                    
+                    // 如果所有数据都已读取，清空缓存
+                    if (_readOffset >= _lastDataLength)
                     {
-                        int bytesToRead = Math.Min(count - totalRead, data.Length);
-                        Buffer.BlockCopy(data, 0, buffer, offset + totalRead, bytesToRead);
-                        totalRead += bytesToRead;
-                        
-                        // 如果完全读取了这个数据块
-                        if (bytesToRead == data.Length)
-                        {
-                            _dataQueue.TryDequeue(out _); // 移除已读数据块
-                            _totalBytesAvailable -= data.Length;
-                        }
-                        else
-                        {
-                            // 如果只读取了部分数据，创建新的数据块保存剩余数据
-                            byte[] remainingData = new byte[data.Length - bytesToRead];
-                            Buffer.BlockCopy(data, bytesToRead, remainingData, 0, remainingData.Length);
-                            
-                            _dataQueue.TryDequeue(out _); // 移除原始数据块
-                            _dataQueue.Enqueue(remainingData); // 将剩余数据重新入队
-                            _totalBytesAvailable -= bytesToRead;
-                            
-                            break; // 已读取所需的字节数
-                        }
+                        _lastReceivedData = null;
+                        _lastDataLength = 0;
+                        _readOffset = 0;
                     }
                 }
             }
@@ -1028,83 +1019,14 @@ namespace Wombat.Network.Sockets
         {
             lock (_dataLock)
             {
-                int released = (int)_totalBytesAvailable;
-                while (_dataQueue.TryDequeue(out _)) { }
-                _totalBytesAvailable = 0;
+                int released = Math.Max(0, _lastDataLength - _readOffset);
+                _lastReceivedData = null;
+                _lastDataLength = 0;
+                _readOffset = 0;
                 return released;
             }
         }
 
-        /// <summary>
-        /// 释放指定百分比的缓冲区空间，保留最新的数据
-        /// </summary>
-        /// <param name="percentage">要释放的缓冲区百分比（0.0-100.0）</param>
-        /// <returns>实际释放的字节数</returns>
-        public int ReleaseBuffer(double percentage)
-        {
-            if (percentage <= 0)
-                return 0;
-                
-            if (percentage >= 100)
-                return ClearReceiveBuffer();
-                
-            lock (_dataLock)
-            {
-                if (_totalBytesAvailable == 0)
-                    return 0;
-                    
-                long bytesToRelease = (long)(_totalBytesAvailable * percentage / 100.0);
-                return ReleaseBufferBytes((int)bytesToRelease);
-            }
-        }
-        
-        /// <summary>
-        /// 释放指定字节数的缓冲区空间，保留最新的数据
-        /// </summary>
-        /// <param name="bytes">要释放的字节数</param>
-        /// <returns>实际释放的字节数</returns>
-        public int ReleaseBufferBytes(int bytes)
-        {
-            if (bytes <= 0)
-                return 0;
-                
-            lock (_dataLock)
-            {
-                if (_totalBytesAvailable == 0)
-                    return 0;
-                    
-                int releasedBytes = 0;
-                while (releasedBytes < bytes && _dataQueue.Count > 0)
-                {
-                    if (_dataQueue.TryPeek(out byte[] oldestData))
-                    {
-                        if (releasedBytes + oldestData.Length <= bytes)
-                        {
-                            // 可以完全释放这个数据块
-                            _dataQueue.TryDequeue(out _);
-                            releasedBytes += oldestData.Length;
-                            _totalBytesAvailable -= oldestData.Length;
-                        }
-                        else
-                        {
-                            // 只需要释放部分数据
-                            int bytesToKeep = oldestData.Length - (bytes - releasedBytes);
-                            byte[] remainingData = new byte[bytesToKeep];
-                            Buffer.BlockCopy(oldestData, oldestData.Length - bytesToKeep, remainingData, 0, bytesToKeep);
-                            
-                            _dataQueue.TryDequeue(out _); // 移除原始数据块
-                            _dataQueue.Enqueue(remainingData); // 将剩余数据重新入队
-                            _totalBytesAvailable -= (bytes - releasedBytes);
-                            releasedBytes = bytes;
-                            break;
-                        }
-                    }
-                }
-                
-                return releasedBytes;
-            }
-        }
-        
         /// <summary>
         /// 读取缓冲区中的所有数据并清空缓冲区
         /// </summary>
@@ -1113,25 +1035,20 @@ namespace Wombat.Network.Sockets
         {
             lock (_dataLock)
             {
-                if (_totalBytesAvailable == 0)
+                if (_lastReceivedData == null || _lastDataLength <= _readOffset)
                     return new byte[0];
                 
-                // 创建一个足够大的缓冲区来存储所有数据
-                byte[] result = new byte[(int)_totalBytesAvailable];
-                int offset = 0;
+                // 计算剩余可读字节数
+                int availableBytes = _lastDataLength - _readOffset;
                 
-                // 复制所有数据块到结果数组
-                while (_dataQueue.Count > 0)
-                {
-                    if (_dataQueue.TryDequeue(out byte[] data))
-                    {
-                        Buffer.BlockCopy(data, 0, result, offset, data.Length);
-                        offset += data.Length;
-                    }
-                }
+                // 复制剩余数据
+                byte[] result = new byte[availableBytes];
+                Buffer.BlockCopy(_lastReceivedData, _readOffset, result, 0, availableBytes);
                 
-                // 重置缓冲区
-                _totalBytesAvailable = 0;
+                // 清空缓存
+                _lastReceivedData = null;
+                _lastDataLength = 0;
+                _readOffset = 0;
                 
                 return result;
             }
@@ -1145,19 +1062,15 @@ namespace Wombat.Network.Sockets
         {
             lock (_dataLock)
             {
-                if (_totalBytesAvailable == 0)
+                if (_lastReceivedData == null || _lastDataLength <= _readOffset)
                     return new byte[0];
                 
-                // 创建一个足够大的缓冲区来存储所有数据
-                byte[] result = new byte[(int)_totalBytesAvailable];
-                int offset = 0;
+                // 计算剩余可读字节数
+                int availableBytes = _lastDataLength - _readOffset;
                 
-                // 遍历队列并复制数据但不移除
-                foreach (byte[] data in _dataQueue)
-                {
-                    Buffer.BlockCopy(data, 0, result, offset, data.Length);
-                    offset += data.Length;
-                }
+                // 复制剩余数据但不清空
+                byte[] result = new byte[availableBytes];
+                Buffer.BlockCopy(_lastReceivedData, _readOffset, result, 0, availableBytes);
                 
                 return result;
             }
