@@ -1,427 +1,169 @@
 # Wombat.Network
 
-一个高性能、功能丰富的.NET网络通信库，支持TCP Socket、WebSocket以及基于System.IO.Pipelines的高性能I/O操作。
+`Wombat.Network` 现已切换到统一通信模型，只保留新接口：
 
-## 目录
-- [简介](#简介)
-- [特性详解](#特性详解)
-- [安装](#安装)
-- [快速入门](#快速入门)
-- [API文档](#api文档)
-- [配置选项](#配置选项)
-- [进阶主题](#进阶主题)
-- [性能优化建议](#性能优化建议)
-- [贡献指南](#贡献指南)
-- [许可信息](#许可信息)
+- 流式传输：`ITransportConnection` / `ITransportListener`
+- 消息通道：`IMessageChannel`
+- framing：`IMessagePipe`
+- 已提供实现：TCP、UDP、TLS、Serial、WebSocket channel
 
-## 简介
-
-Wombat.Network是一个用于.NET平台的网络通信库，提供了简单易用但功能强大的API，用于构建高性能的网络应用程序。无论是构建实时通信应用、游戏服务器还是物联网设备通信，Wombat.Network都能满足您的需求。
-
-### 主要功能
-
-- **TCP Socket客户端/服务器**：提供可靠的TCP通信功能
-- **WebSocket客户端/服务器**：支持标准WebSocket协议
-- **高性能I/O处理**：基于System.IO.Pipelines的高效数据处理
-- **多种帧格式**：支持多种数据帧格式，包括长度前缀、行分隔等
-- **SSL/TLS支持**：内置安全通信支持
-- **异步API**：全面支持异步编程模型
-- **完整的中文API文档**：所有公共API都提供详细的中文XML注释，支持智能感知
-- **可配置性**：提供丰富的配置选项以满足不同场景需求
-- **可扩展性**：易于扩展的架构设计
-
-## 特性详解
-
-### 高性能
-
-- **基于System.IO.Pipelines**：利用最新的高性能I/O API
-- **异步非阻塞I/O**：全面使用异步操作提高吞吐量
-- **智能缓冲区管理**：高效的内存使用和缓冲区重用
-- **高并发支持**：设计用于处理大量并发连接
-- **超时控制**：精细的超时和取消操作支持
-
-### 可靠性
-
-- **健壮的错误处理**：全面的异常处理机制
-- **自动重连**：可配置的连接恢复策略
-- **连接状态管理**：详细的连接状态跟踪
-- **资源自动释放**：实现IDisposable确保资源正确释放
-- **日志支持**：集成Microsoft.Extensions.Logging支持
-
-### 易用性
-
-- **流畅的API设计**：简洁明了的方法命名和参数设计
-- **全面的配置选项**：易于自定义的配置对象
-- **直观的事件模型**：基于回调的事件处理
-- **支持多种数据格式**：文本、二进制、JSON等
-- **完整的中文文档**：所有类、方法、属性都提供详细的中文XML注释
-- **智能感知友好**：在Visual Studio等IDE中提供完整的中文智能感知支持
-- **开发者友好**：降低中文开发者的学习和使用门槛
+目标框架保持 `netstandard2.0`，代码内部基于 `System.IO.Pipelines`、`ReadOnlySequence<byte>`、`Memory<T>` 组织。
 
 ## 安装
-
-### NuGet安装
 
 ```bash
 dotnet add package Wombat.Network
 ```
 
-或在Visual Studio的NuGet包管理器中搜索"Wombat.Network"。
-
-### 手动安装
-
-1. 从GitHub仓库克隆源代码：
-
-```bash
-git clone https://github.com/wombatwebcg/Wombat.Network.git
-```
-
-2. 构建解决方案：
-
-```bash
-cd Wombat.Network
-dotnet build
-```
-
-3. 在您的项目中引用Wombat.Network.dll。
-
-### 支持的平台
-
-- .NET Standard 2.0+
-- .NET Core 2.0+
-- .NET 5/6/7/8
-
-## 快速入门
-
-以下是一些基本使用示例，帮助您快速上手：
-
-### TCP Socket客户端
-
-创建并使用TCP Socket客户端。[查看详细示例](#tcp-socket客户端)
-
-### TCP Socket服务器
-
-创建并使用TCP Socket服务器。[查看详细示例](#tcp-socket服务器)
-
-### WebSocket客户端
-
-创建并使用WebSocket客户端。[查看详细示例](#websocket客户端)
-
-### WebSocket服务器
-
-创建并使用WebSocket服务器。[查看详细示例](#websocket服务器)
-
-### 高性能 Pipeline 连接
-
-使用System.IO.Pipelines进行高性能Socket通信。[查看详细示例](#高性能-pipeline-连接)
-
-## API文档
-
-Wombat.Network 提供了完整的中文API文档支持，让中文开发者能够更轻松地使用和理解库的功能。
-
-### 完整的中文XML注释
-
-- **全面覆盖**：所有公共类、接口、方法、属性和枚举都提供了详细的中文XML注释
-- **详细说明**：包含功能描述、参数说明、返回值说明、异常信息和使用示例
-- **使用指导**：提供最佳实践建议和注意事项
-- **标准格式**：遵循.NET XML文档注释标准，确保兼容性
-
-### IDE智能感知支持
-
-在Visual Studio、Visual Studio Code、JetBrains Rider等现代IDE中，您可以享受到：
-
-- **中文智能感知提示**：输入代码时自动显示中文方法和属性说明
-- **参数提示**：详细的参数类型和用途说明
-- **快速信息**：鼠标悬停即可查看详细的中文文档
-- **错误提示**：异常情况的中文说明和处理建议
-
-### 文档生成
-
-您可以使用标准的.NET文档生成工具从XML注释生成完整的API文档：
-
-```bash
-# 使用DocFX生成文档
-docfx init -q
-docfx docfx_project\docfx.json --serve
-
-# 使用Sandcastle Help File Builder
-# 或其他支持XML注释的文档生成工具
-```
-
-### 核心模块文档覆盖
-
-以下模块已完全覆盖中文XML注释：
-
-- **网络连接**：TCP Socket、WebSocket客户端和服务器
-- **帧处理**：各种帧构建器和编解码器
-- **缓冲区管理**：高性能内存管理组件
-- **配置系统**：所有配置类和选项
-- **扩展机制**：WebSocket扩展和子协议支持
-- **异常处理**：完整的异常类型和错误信息
-
-## 配置选项
-
-Wombat.Network提供了丰富的配置选项，使您能够根据具体需求定制网络组件的行为。
-
-### TCP Socket客户端配置
-
-`TcpSocketClientConfiguration`类提供以下主要配置选项：
-
-| 配置项 | 说明 | 默认值 |
-|-------|------|-------|
-| `BufferManager` | 缓冲区管理器 | 新的SegmentBufferManager实例 |
-| `FrameBuilder` | 帧构建器，决定如何解析数据包 | LengthPrefixedFrameBuilder |
-| `ReceiveBufferSize` | 接收缓冲区大小（字节） | 8192 |
-| `SendBufferSize` | 发送缓冲区大小（字节） | 8192 |
-| `ReceiveTimeout` | 接收超时时间 | 30秒 |
-| `SendTimeout` | 发送超时时间 | 30秒 |
-| `ConnectTimeout` | 连接超时时间 | 30秒 |
-| `NoDelay` | 是否禁用Nagle算法 | true |
-| `SslEnabled` | 是否启用SSL/TLS | false |
-| `OperationTimeout` | 一般操作超时时间 | 30秒 |
-| `EnablePipelineIo` | 是否启用高性能Pipeline | true |
-| `MaxConcurrentOperations` | 每个连接的最大并发操作数 | 10 |
-
-### WebSocket客户端配置
-
-`WebSocketClientConfiguration`类提供以下主要配置选项：
-
-| 配置项 | 说明 | 默认值 |
-|-------|------|-------|
-| `BufferManager` | 缓冲区管理器 | 新的SegmentBufferManager实例 |
-| `ReceiveBufferSize` | 接收缓冲区大小（字节） | 8192 |
-| `SendBufferSize` | 发送缓冲区大小（字节） | 8192 |
-| `ReceiveTimeout` | 接收超时时间 | 30秒 |
-| `SendTimeout` | 发送超时时间 | 30秒 |
-| `ConnectTimeout` | 连接超时时间 | 30秒 |
-| `CloseTimeout` | 关闭超时时间 | 10秒 |
-| `KeepAliveInterval` | 保活间隔时间 | 60秒 |
-| `KeepAliveTimeout` | 保活超时时间 | 10秒 |
-| `EnabledExtensions` | 启用的WebSocket扩展 | 默认包含PerMessageCompressionExtension |
-
-### 帧构建器
-
-Wombat.Network支持多种帧格式，您可以根据需要选择合适的帧构建器：
-
-1. **LengthPrefixedFrameBuilder**：长度前缀帧，消息前加入长度字段
-2. **LengthFieldBasedFrameBuilder**：基于长度字段的帧，可以灵活设置长度字段位置和大小
-3. **LineBasedFrameBuilder**：基于行分隔符的帧，适合文本协议
-4. **RawBufferFrameBuilder**：原始缓冲区帧，无特殊格式
-
-示例：
-```csharp
-// 使用长度前缀帧构建器
-config.FrameBuilder = new LengthPrefixedFrameBuilder();
-
-// 使用基于行的帧构建器
-config.FrameBuilder = new LineBasedFrameBuilder();
-
-// 使用自定义长度字段帧构建器
-config.FrameBuilder = new LengthFieldBasedFrameBuilder(
-    lengthFieldOffset: 0,     // 长度字段起始位置
-    lengthFieldLength: 4,     // 长度字段占用字节数
-    lengthAdjustment: 0,      // 长度调整值
-    initialBytesToStrip: 4    // 解码时跳过的初始字节数
-);
-```
-
-## 进阶主题
-
-### SSL/TLS配置
-
-在TCP Socket和WebSocket客户端中启用SSL/TLS加密：
+## 核心接口
 
 ```csharp
-// TCP Socket客户端SSL配置
-var config = new TcpSocketClientConfiguration
+public interface ITransportConnection
 {
-    SslEnabled = true,
-    SslTargetHost = "example.com",
-    SslClientCertificates = new X509CertificateCollection
-    {
-        new X509Certificate2("client.pfx", "password")
-    },
-    SslEncryptionPolicy = EncryptionPolicy.RequireEncryption,
-    SslEnabledProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-    SslCheckCertificateRevocation = true,
-    SslPolicyErrorsBypassed = false
-};
-
-// WebSocket服务器SSL配置
-var config = new WebSocketServerConfiguration
-{
-    SslEnabled = true,
-    SslServerCertificate = new X509Certificate2("server.pfx", "password"),
-    SslEnabledProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-    SslCheckCertificateRevocation = true,
-    SslPolicyErrorsBypassed = false
-};
-```
-
-### WebSocket扩展和子协议
-
-WebSocket支持标准扩展和子协议的注册和使用：
-
-```csharp
-// 客户端启用压缩扩展
-var config = new WebSocketClientConfiguration();
-config.EnabledExtensions.Add(
-    PerMessageCompressionExtension.RegisteredToken, 
-    new PerMessageCompressionExtensionNegotiator()
-);
-config.OfferedExtensions.Add(
-    new WebSocketExtensionOfferDescription(PerMessageCompressionExtension.RegisteredToken)
-);
-
-// 服务器端启用自定义子协议
-var config = new WebSocketServerConfiguration();
-config.EnabledSubProtocols.Add(
-    "myprotocol", 
-    new MyProtocolNegotiator()
-);
-```
-
-### 自定义帧构建器
-
-您可以通过实现`IFrameBuilder`接口创建自定义帧构建器：
-
-```csharp
-public class MyCustomFrameBuilder : IFrameBuilder
-{
-    public IFrameDecoder Decoder { get; }
-    public IFrameEncoder Encoder { get; }
-    
-    public MyCustomFrameBuilder()
-    {
-        Decoder = new MyCustomFrameDecoder();
-        Encoder = new MyCustomFrameEncoder();
-    }
+    string Id { get; }
+    EndPoint LocalEndPoint { get; }
+    EndPoint RemoteEndPoint { get; }
+    IDuplexPipe Transport { get; }
+    Task StartAsync(CancellationToken cancellationToken = default);
+    Task CloseAsync(CancellationToken cancellationToken = default);
 }
 
-public class MyCustomFrameDecoder : IFrameDecoder
+public interface ITransportListener
 {
-    public bool TryDecodeFrame(byte[] buffer, int offset, int count, out int frameLength, out byte[] payload, out int payloadOffset, out int payloadCount)
-    {
-        // 实现您的解码逻辑
-    }
+    Task StartAsync(CancellationToken cancellationToken = default);
+    Task<ITransportConnection> AcceptAsync(CancellationToken cancellationToken = default);
+    Task CloseAsync(CancellationToken cancellationToken = default);
 }
 
-public class MyCustomFrameEncoder : IFrameEncoder
+public interface IMessageChannel
 {
-    public void EncodeFrame(byte[] payload, int offset, int count, out byte[] frameBuffer, out int frameBufferOffset, out int frameBufferLength)
-    {
-        // 实现您的编码逻辑
-    }
+    string Id { get; }
+    ValueTask SendAsync(ReadOnlyMemory<byte> message, CancellationToken cancellationToken = default);
+    ValueTask<ReceivedMessage?> ReceiveAsync(CancellationToken cancellationToken = default);
+    Task CloseAsync(CancellationToken cancellationToken = default);
 }
 ```
 
-## 性能优化建议
-
-以下是一些提高Wombat.Network性能的建议：
-
-### 1. 使用System.IO.Pipelines
-
-启用Pipeline I/O以获得更高的吞吐量和更低的内存占用：
+## TCP 示例
 
 ```csharp
-var config = new TcpSocketClientConfiguration
+using System.Buffers;
+using System.Net;
+using Wombat.Network.Channels;
+using Wombat.Network.Protocols.Framing;
+using Wombat.Network.Transports.Tcp;
+
+var endPoint = new IPEndPoint(IPAddress.Loopback, 9000);
+var listener = new TcpTransportListener(endPoint);
+var pipe = new LengthFieldMessagePipe(LengthField.FourBytes);
+
+await listener.StartAsync();
+
+_ = Task.Run(async () =>
 {
-    EnablePipelineIo = true
-};
+    var accepted = await listener.AcceptAsync();
+    await accepted.StartAsync();
+
+    var serverChannel = new StreamMessageChannel(accepted, pipe);
+    var inbound = await serverChannel.ReceiveAsync();
+    if (inbound.HasValue)
+    {
+        await serverChannel.SendAsync(ToArray(inbound.Value.Payload));
+    }
+});
+
+var client = await TcpTransportConnection.ConnectAsync(endPoint);
+await client.StartAsync();
+
+var clientChannel = new StreamMessageChannel(client, pipe);
+await clientChannel.SendAsync(new byte[] { 1, 2, 3, 4 });
+var echoed = await clientChannel.ReceiveAsync();
 ```
 
-或直接使用`PipelineSocketConnection`类处理高性能Socket通信。
-
-### 2. 框架兼容性注意事项
-
-在不同的.NET框架版本中，Socket API的使用方式存在差异：
-
-- **.NET Standard 2.0**: 使用`SocketAsyncEventArgs`进行异步操作，不支持`Socket.ReceiveAsync(Memory<byte>, SocketFlags)`和`Socket.SendAsync(ReadOnlyMemory<byte>, SocketFlags)`。
-- **.NET Core 3.0+/.NET 5+**: 支持基于`Memory<T>`的异步Socket API，可以直接使用`await socket.ReceiveAsync(memory, SocketFlags.None)`。
-
-如果您的项目面向.NET Standard 2.0，`PipelineSocketConnection`已经内部处理了这些差异，确保跨平台兼容性。对于自定义Socket操作，请使用兼容的API。
+## UDP 示例
 
 ```csharp
-// .NET Standard 2.0 兼容写法
-var args = new SocketAsyncEventArgs();
-args.SetBuffer(buffer, 0, buffer.Length);
-args.Completed += OnOperationCompleted;
-bool pending = socket.ReceiveAsync(args);
-if (!pending) OnOperationCompleted(socket, args);
+using System.Net;
+using Wombat.Network.Channels;
+using Wombat.Network.Transports.Udp;
 
-// .NET Core 3.0+/.NET 5+ 写法 (不兼容 .NET Standard 2.0)
-int bytesReceived = await socket.ReceiveAsync(memory, SocketFlags.None);
+var serverEndPoint = new IPEndPoint(IPAddress.Loopback, 9001);
+using var serverTransport = new UdpDatagramTransport(serverEndPoint);
+using var clientTransport = new UdpDatagramTransport(defaultRemoteEndPoint: serverEndPoint);
+
+await serverTransport.StartAsync();
+await clientTransport.StartAsync();
+
+var serverChannel = new DatagramMessageChannel(serverTransport);
+var clientChannel = new DatagramMessageChannel(clientTransport, serverEndPoint);
+
+await clientChannel.SendAsync(new byte[] { 1, 2, 3 });
+var received = await serverChannel.ReceiveAsync();
 ```
 
-### 3. 选择合适的帧格式
-
-为您的应用场景选择最合适的帧格式：
-- 对于二进制协议，使用`LengthFieldBasedFrameBuilder`
-- 对于文本协议，使用`LineBasedFrameBuilder`
-- 对于大量小消息，使用`RawBufferFrameBuilder`
-
-### 4. 配置适当的缓冲区大小
-
-根据您的消息大小设置合适的缓冲区参数：
+## WebSocket 示例
 
 ```csharp
-var config = new TcpSocketClientConfiguration
+using System.Net;
+using Wombat.Network.Channels;
+using Wombat.Network.Protocols.WebSocket;
+using Wombat.Network.Transports.Tcp;
+
+var port = 9002;
+var listener = new TcpTransportListener(new IPEndPoint(IPAddress.Loopback, port));
+await listener.StartAsync();
+
+_ = Task.Run(async () =>
 {
-    ReceiveBufferSize = 16384,  // 更大的接收缓冲区
-    SendBufferSize = 16384,     // 更大的发送缓冲区
-    BufferManager = new SegmentBufferManager(
-        maxCapacity: 1000,      // 最大缓冲区数量
-        bufferSize: 16384,      // 每个缓冲区大小
-        maxSegmentSize: 16,     // 每个缓冲段的最大大小
-        isCircular: true        // 循环使用缓冲区
-    )
-};
+    var accepted = (TcpTransportConnection)await listener.AcceptAsync();
+    await accepted.StartAsync();
+    await WebSocketHandshakeMiddleware.AcceptServerAsync(accepted);
+
+    var serverChannel = new WebSocketMessageChannel(accepted, isClient: false);
+    var inbound = await serverChannel.ReceiveAsync();
+    if (inbound.HasValue)
+    {
+        await serverChannel.SendTextAsync("pong");
+    }
+});
+
+var client = await TcpTransportConnection.ConnectAsync(new IPEndPoint(IPAddress.Loopback, port));
+await client.StartAsync();
+await WebSocketHandshakeMiddleware.AcceptClientAsync(client, $"127.0.0.1:{port}", "/chat");
+
+var channel = new WebSocketMessageChannel(client, isClient: true);
+await channel.SendTextAsync("ping");
+var echoed = await channel.ReceiveAsync();
 ```
 
-### 5. 优化连接参数
+## 目录
 
-调整连接和超时参数以获得更好的性能：
-
-```csharp
-var config = new TcpSocketClientConfiguration
-{
-    NoDelay = true,               // 禁用Nagle算法
-    MaxConcurrentOperations = 20, // 增加并发操作数
-    OperationTimeout = TimeSpan.FromSeconds(5), // 减少操作超时
-    KeepAlive = true,             // 启用TCP保活
-    KeepAliveInterval = TimeSpan.FromSeconds(30) // 设置保活间隔
-};
+```text
+Wombat.Network/
+  Transports/
+    Abstractions/
+    Tcp/
+    Udp/
+    Tls/
+    Serial/
+  Channels/
+  Protocols/
+    Framing/
+    WebSocket/
+  Pipelines/
 ```
 
-### 6. 减少内存分配
+## 验证
 
-- 重用缓冲区而不是每次分配新内存
-- 使用`ArrayPool<byte>`或缓冲区池管理内存
-- 避免不必要的数据复制操作
+- 单测：`Wombat.Network.UnitTest/NewModel`
+- 基准：`Wombat.Network.Benchmark/Benchmarks/New*`
 
-## 贡献指南
+## 破坏性升级
 
-我们欢迎社区的贡献！如果您想参与Wombat.Network的开发，请遵循以下步骤：
+旧 `TcpSocket*`、`UdpSocket*`、旧 `WebSocketClient/Server/Session`、`PipelineSocketConnection`、旧 DI/build 包装层已删除。
 
-1. Fork仓库到您的GitHub账号
-2. 创建新的特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交您的更改 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建一个Pull Request
+如果你还在用旧 API，需要按新模型重写到：
 
-### 代码规范
-
-- 请遵循现有的代码风格和命名约定
-- **为所有公共API添加完整的中文XML注释**，包括类、方法、属性、参数、返回值和异常说明
-- 确保XML注释内容准确、详细，并提供使用指导和最佳实践建议
-- 确保所有单元测试通过
-- 添加新功能时应包含相应的单元测试
-- 保持中文注释的专业性和一致性，遵循项目现有的注释风格
-
-## 许可信息
-
-Wombat.Network使用MIT许可证发布。详细信息请参见[LICENSE](LICENSE)文件。
-
----
-
-© 2023 wombatwebcg. 保留所有权利。
+- TCP/Serial/TLS：`Transport + StreamMessageChannel + IMessagePipe`
+- UDP：`UdpDatagramTransport + DatagramMessageChannel`
+- WebSocket：`TcpTransportConnection + WebSocketHandshakeMiddleware + WebSocketMessageChannel`
