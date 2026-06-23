@@ -1,17 +1,17 @@
 using System.Net;
 using Wombat.Network.Channels;
-using Wombat.Network.Protocols.Framing;
+using Wombat.Network.Protocols.WebSocket;
 using Wombat.Network.TestHelper;
-using Wombat.Network.Transports.Abstractions;
 using Wombat.Network.Transports.Tcp;
 
-namespace Wombat.Network.TcpTest;
+namespace Wombat.Network.WebSokcetTest;
 
-internal static class TcpTestHarness
+internal static class WebSocketTestHarness
 {
     public static async Task RunConnectedPairAsync(
-        Func<StreamMessageChannel, CancellationToken, Task> serverAction,
-        Func<StreamMessageChannel, CancellationToken, Task> clientAction,
+        Func<WebSocketMessageChannel, WebSocketHandshakeRequest, CancellationToken, Task> serverAction,
+        Func<WebSocketMessageChannel, CancellationToken, Task> clientAction,
+        string path,
         CancellationToken cancellationToken)
     {
         var endPoint = new IPEndPoint(IPAddress.Loopback, NetworkTestHelper.GetAvailablePort());
@@ -20,17 +20,18 @@ internal static class TcpTestHarness
 
         var serverTask = Task.Run(async () =>
         {
-            var accepted = await listener.AcceptAsync(cancellationToken);
+            using var accepted = (TcpTransportConnection)await listener.AcceptAsync(cancellationToken);
             await accepted.StartAsync(cancellationToken);
-            var serverChannel = CreateChannel(accepted);
+            var request = await WebSocketHandshakeMiddleware.AcceptServerAsync(accepted, cancellationToken);
+            var serverChannel = new WebSocketMessageChannel(accepted, isClient: false);
 
             try
             {
-                await serverAction(serverChannel, cancellationToken);
+                await serverAction(serverChannel, request, cancellationToken);
             }
             finally
             {
-                await serverChannel.CloseAsync(cancellationToken);
+                await accepted.CloseAsync(cancellationToken);
             }
         }, cancellationToken);
 
@@ -38,7 +39,8 @@ internal static class TcpTestHarness
         {
             using var client = await TcpTransportConnection.ConnectAsync(endPoint, cancellationToken: cancellationToken);
             await client.StartAsync(cancellationToken);
-            var clientChannel = CreateChannel(client);
+            await WebSocketHandshakeMiddleware.AcceptClientAsync(client, $"127.0.0.1:{endPoint.Port}", path, cancellationToken);
+            var clientChannel = new WebSocketMessageChannel(client, isClient: true);
 
             try
             {
@@ -46,14 +48,11 @@ internal static class TcpTestHarness
             }
             finally
             {
-                await clientChannel.CloseAsync(cancellationToken);
+                await client.CloseAsync(cancellationToken);
             }
         }, cancellationToken);
 
         await Task.WhenAll(serverTask, clientTask);
         await listener.CloseAsync(cancellationToken);
     }
-
-    public static StreamMessageChannel CreateChannel(ITransportConnection connection)
-        => new(connection, new LengthFieldMessagePipe(LengthField.FourBytes));
 }

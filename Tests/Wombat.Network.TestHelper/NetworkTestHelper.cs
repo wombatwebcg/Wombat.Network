@@ -1,11 +1,13 @@
 using System.Buffers;
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Wombat.Network.Channels;
 
-namespace Wombat.Network.TcpTest;
+namespace Wombat.Network.TestHelper;
 
-internal static class TestHelpers
+public static class NetworkTestHelper
 {
     public static void ValidateText(ReceivedMessage? message, string expectedText, string operation)
     {
@@ -55,6 +57,15 @@ internal static class TestHelpers
         }
 
         return builder.ToString();
+    }
+
+    public static int GetAvailablePort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
     }
 
     public static void Ensure(bool condition, string message)

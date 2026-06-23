@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using Wombat.Network.TestHelper;
 using Wombat.Network.Transports.Abstractions;
 using Wombat.Network.Transports.Tcp;
 
@@ -14,6 +15,7 @@ internal static class Scenarios
         new("LargePayloadDuplex", "大字符串双向各发送接收 2 次，校验长度和哈希。", RunLargePayloadDuplexAsync),
         new("ManySmallMessages", "双向连续发送大量小消息，校验顺序和内容。", RunManySmallMessagesAsync),
         new("MixedPayloadSizes", "混合 0B/1B/10B/1KB/1MB/大消息，校验边界长度。", RunMixedPayloadSizesAsync),
+        new("ReconnectAfterDisconnect", "客户端断开后重新连接同一监听端口，校验新连接仍可正常收发。", RunReconnectAfterDisconnectAsync),
         new("TimeoutAndCancellation", "验证 Accept/Receive 在取消时能正常退出。", RunTimeoutAndCancellationAsync),
         new("ParallelClients", "多个客户端并发连接并双向收发，校验隔离性。", RunParallelClientsAsync),
     ];
@@ -21,7 +23,7 @@ internal static class Scenarios
     private static async Task RunLargePayloadDuplexAsync()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        var payload = Encoding.UTF8.GetBytes(TestHelpers.CreateLargeNumericString(10_000_000));
+        var payload = Encoding.UTF8.GetBytes(NetworkTestHelper.CreateLargeNumericString(10_000_000));
         var expectedHash = SHA256.HashData(payload);
 
         await TcpTestHarness.RunConnectedPairAsync(
@@ -31,7 +33,7 @@ internal static class Scenarios
                 {
                     await serverChannel.SendAsync(payload, token);
                     var received = await serverChannel.ReceiveAsync(token);
-                    TestHelpers.ValidatePayload(received, payload.Length, expectedHash, $"server round {round}");
+                    NetworkTestHelper.ValidatePayload(received, payload.Length, expectedHash, $"server round {round}");
                 }
             },
             async (clientChannel, token) =>
@@ -40,7 +42,7 @@ internal static class Scenarios
                 {
                     await clientChannel.SendAsync(payload, token);
                     var received = await clientChannel.ReceiveAsync(token);
-                    TestHelpers.ValidatePayload(received, payload.Length, expectedHash, $"client round {round}");
+                    NetworkTestHelper.ValidatePayload(received, payload.Length, expectedHash, $"client round {round}");
                 }
             },
             cts.Token);
@@ -62,12 +64,12 @@ internal static class Scenarios
                 for (var i = 0; i < serverMessages.Length; i++)
                 {
                     var received = await serverChannel.ReceiveAsync(token);
-                    TestHelpers.ValidateText(received, clientMessages[i], $"server recv {i + 1}");
+                    NetworkTestHelper.ValidateText(received, clientMessages[i], $"server recv {i + 1}");
                     await serverChannel.SendAsync(Encoding.UTF8.GetBytes(serverMessages[i]), token);
                 }
 
                 var closed = await serverChannel.ReceiveAsync(token);
-                TestHelpers.Ensure(!closed.HasValue, "server should observe remote close after final small-message echo.");
+                NetworkTestHelper.Ensure(!closed.HasValue, "server should observe remote close after final small-message echo.");
             },
             async (clientChannel, token) =>
             {
@@ -75,7 +77,7 @@ internal static class Scenarios
                 {
                     await clientChannel.SendAsync(Encoding.UTF8.GetBytes(clientMessages[i]), token);
                     var received = await clientChannel.ReceiveAsync(token);
-                    TestHelpers.ValidateText(received, serverMessages[i], $"client recv {i + 1}");
+                    NetworkTestHelper.ValidateText(received, serverMessages[i], $"client recv {i + 1}");
                 }
             },
             cts.Token);
@@ -91,9 +93,9 @@ internal static class Scenarios
             Array.Empty<byte>(),
             new byte[] { 0x2A },
             Encoding.UTF8.GetBytes("0123456789"),
-            TestHelpers.CreateRepeatedPayload(1024, 0x61),
-            TestHelpers.CreateRepeatedPayload(1024 * 1024, 0x62),
-            Encoding.UTF8.GetBytes(TestHelpers.CreateLargeNumericString(200_000)),
+            NetworkTestHelper.CreateRepeatedPayload(1024, 0x61),
+            NetworkTestHelper.CreateRepeatedPayload(1024 * 1024, 0x62),
+            Encoding.UTF8.GetBytes(NetworkTestHelper.CreateLargeNumericString(200_000)),
         };
 
         await TcpTestHarness.RunConnectedPairAsync(
@@ -104,7 +106,7 @@ internal static class Scenarios
                     var sent = payloads[i];
                     await serverChannel.SendAsync(sent, token);
                     var received = await serverChannel.ReceiveAsync(token);
-                    TestHelpers.ValidatePayload(received, sent, $"server mixed {i + 1}");
+                    NetworkTestHelper.ValidatePayload(received, sent, $"server mixed {i + 1}");
                 }
             },
             async (clientChannel, token) =>
@@ -114,7 +116,7 @@ internal static class Scenarios
                     var sent = payloads[i];
                     await clientChannel.SendAsync(sent, token);
                     var received = await clientChannel.ReceiveAsync(token);
-                    TestHelpers.ValidatePayload(received, sent, $"client mixed {i + 1}");
+                    NetworkTestHelper.ValidatePayload(received, sent, $"client mixed {i + 1}");
                 }
             },
             cts.Token);
@@ -122,9 +124,63 @@ internal static class Scenarios
         Console.WriteLine($"      payload sizes: {string.Join(", ", payloads.Select(static x => x.Length))}");
     }
 
+    private static async Task RunReconnectAfterDisconnectAsync()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var endPoint = new IPEndPoint(IPAddress.Loopback, NetworkTestHelper.GetAvailablePort());
+        using var listener = new TcpTransportListener(endPoint);
+        await listener.StartAsync(cts.Token);
+
+        var serverTask = Task.Run(async () =>
+        {
+            for (var session = 1; session <= 2; session++)
+            {
+                using var accepted = (TcpTransportConnection)await listener.AcceptAsync(cts.Token);
+                await accepted.StartAsync(cts.Token);
+                var channel = TcpTestHarness.CreateChannel(accepted);
+
+                try
+                {
+                    var received = await channel.ReceiveAsync(cts.Token);
+                    NetworkTestHelper.ValidateText(received, $"client-session-{session}", $"server reconnect {session}");
+                    await channel.SendAsync(Encoding.UTF8.GetBytes($"server-session-{session}"), cts.Token);
+
+                    var closed = await channel.ReceiveAsync(cts.Token);
+                    NetworkTestHelper.Ensure(!closed.HasValue, $"server reconnect {session} should observe remote close.");
+                }
+                finally
+                {
+                    await channel.CloseAsync(cts.Token);
+                }
+            }
+        }, cts.Token);
+
+        for (var session = 1; session <= 2; session++)
+        {
+            using var client = await TcpTransportConnection.ConnectAsync(endPoint, cancellationToken: cts.Token);
+            await client.StartAsync(cts.Token);
+            var channel = TcpTestHarness.CreateChannel(client);
+
+            try
+            {
+                await channel.SendAsync(Encoding.UTF8.GetBytes($"client-session-{session}"), cts.Token);
+                var received = await channel.ReceiveAsync(cts.Token);
+                NetworkTestHelper.ValidateText(received, $"server-session-{session}", $"client reconnect {session}");
+            }
+            finally
+            {
+                await channel.CloseAsync(cts.Token);
+            }
+        }
+
+        await serverTask;
+        await listener.CloseAsync(cts.Token);
+        Console.WriteLine("      reconnect sessions: 2");
+    }
+
     private static async Task RunTimeoutAndCancellationAsync()
     {
-        var acceptPort = TcpTestHarness.GetAvailablePort();
+        var acceptPort = NetworkTestHelper.GetAvailablePort();
         using (var acceptListener = new TcpTransportListener(new IPEndPoint(IPAddress.Loopback, acceptPort)))
         {
             await acceptListener.StartAsync();
@@ -148,7 +204,7 @@ internal static class Scenarios
             }
         }
 
-        var receivePort = TcpTestHarness.GetAvailablePort();
+        var receivePort = NetworkTestHelper.GetAvailablePort();
         using var listener = new TcpTransportListener(new IPEndPoint(IPAddress.Loopback, receivePort));
         await listener.StartAsync();
 
@@ -186,7 +242,7 @@ internal static class Scenarios
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         const int clientCount = 12;
         const int rounds = 2;
-        var endPoint = new IPEndPoint(IPAddress.Loopback, TcpTestHarness.GetAvailablePort());
+        var endPoint = new IPEndPoint(IPAddress.Loopback, NetworkTestHelper.GetAvailablePort());
 
         using var listener = new TcpTransportListener(endPoint);
         await listener.StartAsync(cts.Token);
@@ -215,7 +271,7 @@ internal static class Scenarios
                     var text = $"client-{clientId}-round-{round}";
                     await channel.SendAsync(Encoding.UTF8.GetBytes(text), cts.Token);
                     var received = await channel.ReceiveAsync(cts.Token);
-                    TestHelpers.ValidateText(received, $"echo:{text}", $"parallel client {clientId} round {round}");
+                    NetworkTestHelper.ValidateText(received, $"echo:{text}", $"parallel client {clientId} round {round}");
                 }
 
                 await channel.CloseAsync(cts.Token);
@@ -239,13 +295,13 @@ internal static class Scenarios
             for (var round = 1; round <= 2; round++)
             {
                 var received = await channel.ReceiveAsync(cancellationToken);
-                TestHelpers.Ensure(received.HasValue, $"parallel server round {round} should receive one message.");
-                var text = Encoding.UTF8.GetString(TestHelpers.ToArray(received!.Value.Payload));
+                NetworkTestHelper.Ensure(received.HasValue, $"parallel server round {round} should receive one message.");
+                var text = Encoding.UTF8.GetString(NetworkTestHelper.ToArray(received!.Value.Payload));
                 await channel.SendAsync(Encoding.UTF8.GetBytes($"echo:{text}"), cancellationToken);
             }
 
             var closed = await channel.ReceiveAsync(cancellationToken);
-            TestHelpers.Ensure(!closed.HasValue, "parallel server should observe remote close after final echo.");
+            NetworkTestHelper.Ensure(!closed.HasValue, "parallel server should observe remote close after final echo.");
         }
         finally
         {
