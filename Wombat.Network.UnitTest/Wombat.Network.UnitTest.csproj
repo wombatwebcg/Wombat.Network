@@ -32,6 +32,7 @@
     <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Protocol\Wombat.Network.Mqtt.Protocol.csproj" />
     <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Transport\Wombat.Network.Mqtt.Transport.csproj" />
     <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Client\Wombat.Network.Mqtt.Client.csproj" />
+    <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Broker\Wombat.Network.Mqtt.Broker.csproj" />
   </ItemGroup>
 
 </Project>

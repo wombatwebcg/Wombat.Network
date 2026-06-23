@@ -18,26 +18,33 @@ public class MqttClientFlowTests
     [Fact]
     public async Task Client_OverTcpConnection_ShouldConnectSubscribePingPublishAndDisconnect()
     {
-        var pair = InMemoryTransportConnection.CreatePair();
-        var server = new MqttPipeConnection(pair.Server);
-        var clientFactory = new DelegateMqttConnectionFactory(_ => Task.FromResult<IMqttConnection>(new MqttPipeConnection(pair.Client)));
+        var script = new ScriptedMqttConnection(
+            new MqttConnAckPacket(),
+            new MqttSubAckPacket(1, new byte[] { 1 }),
+            new MqttPingRespPacket(),
+            new MqttPubAckPacket(2));
+        var clientFactory = new DelegateMqttConnectionFactory(_ => Task.FromResult<IMqttConnection>(script));
         var client = new MqttClient(new MqttClientOptions
         {
             Endpoint = new MqttEndpoint("localhost", 1883),
             ClientId = "client-one",
             KeepAliveSeconds = 12,
         }, clientFactory);
-        var serverLoop = RunServerLoopAsync(server);
 
         var connAck = await client.ConnectAsync();
         var subAck = await client.SubscribeAsync("topic/1", MqttQualityOfService.AtLeastOnce);
         await client.PingAsync();
         await client.PublishAsync("topic/1", new byte[] { 1, 2, 3 }, MqttQualityOfService.AtLeastOnce);
         await client.DisconnectAsync();
-        await serverLoop;
 
         connAck.ReasonCode.Should().Be(0);
         subAck.ReasonCodes.Should().ContainSingle().Which.Should().Be(1);
+        script.SentPackets.Should().ContainInOrder(
+            typeof(MqttConnectPacket),
+            typeof(MqttSubscribePacket),
+            typeof(MqttPingReqPacket),
+            typeof(MqttPublishPacket),
+            typeof(MqttDisconnectPacket));
     }
 
     [Fact]
@@ -61,42 +68,6 @@ public class MqttClientFlowTests
         codec.Decode(received.Value.Span).Should().BeOfType<MqttConnectPacket>();
     }
 
-    private static async Task RunServerLoopAsync(IMqttConnection connection)
-    {
-        var codec = new MqttPacketCodec();
-
-        while (true)
-        {
-            var payload = await connection.ReceiveAsync();
-            if (!payload.HasValue)
-            {
-                return;
-            }
-
-            var packet = codec.Decode(payload.Value.Span);
-            switch (packet)
-            {
-                case MqttConnectPacket _:
-                    await connection.SendAsync(codec.Encode(new MqttConnAckPacket()));
-                    break;
-                case MqttSubscribePacket subscribe:
-                    await connection.SendAsync(codec.Encode(new MqttSubAckPacket(subscribe.PacketIdentifier, new byte[] { 1 })));
-                    break;
-                case MqttPingReqPacket _:
-                    await connection.SendAsync(codec.Encode(new MqttPingRespPacket()));
-                    break;
-                case MqttPublishPacket publish:
-                    await connection.SendAsync(codec.Encode(new MqttPubAckPacket(publish.PacketIdentifier)));
-                    break;
-                case MqttDisconnectPacket _:
-                    await connection.CloseAsync();
-                    return;
-                default:
-                    throw new InvalidOperationException("Unexpected packet: " + packet.GetType().Name);
-            }
-        }
-    }
-
     private sealed class DelegateMqttConnectionFactory : IMqttConnectionFactory
     {
         private readonly Func<MqttEndpoint, Task<IMqttConnection>> _connectAsync;
@@ -108,6 +79,43 @@ public class MqttClientFlowTests
 
         public Task<IMqttConnection> ConnectAsync(MqttEndpoint endpoint, CancellationToken cancellationToken = default)
             => _connectAsync(endpoint);
+    }
+
+    private sealed class ScriptedMqttConnection : IMqttConnection
+    {
+        private readonly MqttPacketCodec _codec = new MqttPacketCodec();
+        private readonly System.Collections.Generic.Queue<ReadOnlyMemory<byte>> _responses;
+
+        public ScriptedMqttConnection(params MqttPacket[] responses)
+        {
+            _responses = new System.Collections.Generic.Queue<ReadOnlyMemory<byte>>();
+            SentPackets = new System.Collections.Generic.List<Type>();
+            foreach (var response in responses)
+            {
+                _responses.Enqueue(_codec.Encode(response));
+            }
+        }
+
+        public System.Collections.Generic.List<Type> SentPackets { get; }
+
+        public ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken = default)
+        {
+            SentPackets.Add(_codec.Decode(packet.Span).GetType());
+            return default;
+        }
+
+        public ValueTask<ReadOnlyMemory<byte>?> ReceiveAsync(CancellationToken cancellationToken = default)
+        {
+            if (_responses.Count == 0)
+            {
+                return new ValueTask<ReadOnlyMemory<byte>?>(result: null);
+            }
+
+            return new ValueTask<ReadOnlyMemory<byte>?>(_responses.Dequeue());
+        }
+
+        public Task CloseAsync(CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     private sealed class InMemoryTransportConnection : ITransportConnection

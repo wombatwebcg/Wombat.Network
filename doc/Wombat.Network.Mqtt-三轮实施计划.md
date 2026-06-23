@@ -238,6 +238,53 @@ Broker 侧保持 builder 但不过度抽象：
 - 如果第二轮就塞入过多插件功能，Broker Core 边界会变糊
 - 如果 Client API 做成事件中心，后续可维护性会迅速变差
 
+### 4.7 当前落地状态（2026-06-23）
+
+本轮已落地：
+
+- `Client` 已补齐 `ConnectAsync`、`ConnectWebSocketAsync`、`PublishAsync`、`SubscribeAsync`、`DisconnectAsync`
+- `Client` 已补充基础日志与 `MqttClientException`
+- `Protocol` 已补充 Will Message 的 `CONNECT` 编解码
+- `Broker` 已落地最小 `MqttBroker` Core
+- 已落地内存 `SessionStore`
+- 已落地 Topic Filter 匹配
+- 已落地 QoS1 基础路由与 `PUBACK`
+- 已落地 Retain 基础处理
+- 已落地 Will 基础处理
+- 已落地 `ListenTcp`、`ListenTls`、`ListenWebSocket`、`ListenWebSocketSecure`、`UsePlugin`、`UseSessionStore` 的配置面
+- `MqttBroker` 已可按 `MqttBrokerOptions` 启动/停止真实 TCP listener
+- `MqttBroker` 已可按 `MqttBrokerOptions` 启动/停止真实 WebSocket listener
+- 已补充 MQTT 相关单元测试和最小 Broker 端到端行为测试
+- 已补充 Broker 侧 TCP / WebSocket 端到端测试
+
+本轮未落地：
+
+- TLS listener 接入
+- WSS listener 接入
+- TLS / WSS 冒烟测试
+- Broker 侧证书装配与 listener 证书配置模型
+
+建议作为第二轮剩余收口项直接追加：
+
+1. 在第三轮前半段补 broker 监听证书配置，把 `ListenTls` / `ListenWebSocketSecure` 接到真实 TLS/WSS listener
+2. 补 TLS / WSS 至少一条冒烟测试
+3. 若后续需要多网卡监听，再把当前 `IPAddress.Any` 固定策略升级成显式绑定地址配置
+
+### 4.8 第二轮收尾结论（2026-06-23）
+
+第二轮按“先收主路径、再延后证书基建”的方式完成收尾：
+
+- MQTT 5 主路径上的 Client API、Broker Core、Session、Topic Filter、QoS1、Retain、Will 已完成并有测试覆盖
+- Broker 已从“只能手动跑 `RunConnectionAsync`”收口到“可按 `MqttBrokerOptions` 启动/停止真实 TCP / WebSocket listener”
+- TCP 与 WebSocket 两条 Broker 主接入路径已经补齐端到端验证，可作为第三轮继续扩展的稳定基线
+- `ListenTls` / `ListenWebSocketSecure` 暂保留配置入口，但真实 listener 与证书装配延后到第三轮前半段处理
+
+收尾判断：
+
+- 第二轮核心目标已达成
+- 第二轮未阻塞第三轮启动
+- 第三轮应优先补 TLS/WSS 与证书配置，再继续插件化、持久化和兼容层
+
 ## 第三轮：插件化、持久化、兼容层与 AOT 收口
 
 ### 5.1 目标

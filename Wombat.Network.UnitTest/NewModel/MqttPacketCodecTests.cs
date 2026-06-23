@@ -41,6 +41,22 @@ public class MqttPacketCodecTests
     }
 
     [Fact]
+    public void EncodeDecode_ConnectWithWill_ShouldRoundTrip()
+    {
+        var codec = new MqttPacketCodec();
+        var packet = new MqttConnectPacket("client-a", true, 45, new MqttPublishPacket("client/will", Encoding.UTF8.GetBytes("bye"), MqttQualityOfService.AtLeastOnce, retain: true));
+
+        var encoded = codec.Encode(packet);
+        var decoded = (MqttConnectPacket)codec.Decode(encoded);
+
+        decoded.WillMessage.Should().NotBeNull();
+        decoded.WillMessage.Topic.Should().Be("client/will");
+        decoded.WillMessage.QualityOfService.Should().Be(MqttQualityOfService.AtLeastOnce);
+        decoded.WillMessage.Retain.Should().BeTrue();
+        Encoding.UTF8.GetString(decoded.WillMessage.Payload.ToArray()).Should().Be("bye");
+    }
+
+    [Fact]
     public void TryReadPacketBytes_WithTwoFrames_ShouldReadOneByOne()
     {
         var codec = new MqttPacketCodec();

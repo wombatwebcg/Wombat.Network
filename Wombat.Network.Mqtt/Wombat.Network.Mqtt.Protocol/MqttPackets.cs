@@ -37,12 +37,13 @@ public abstract class MqttPacket
 
 public sealed class MqttConnectPacket : MqttPacket
 {
-    public MqttConnectPacket(string clientId, bool cleanStart = true, ushort keepAliveSeconds = 30)
+    public MqttConnectPacket(string clientId, bool cleanStart = true, ushort keepAliveSeconds = 30, MqttPublishPacket willMessage = null)
         : base(MqttPacketType.Connect, 0)
     {
         ClientId = clientId ?? string.Empty;
         CleanStart = cleanStart;
         KeepAliveSeconds = keepAliveSeconds;
+        WillMessage = willMessage;
     }
 
     public string ClientId { get; }
@@ -50,6 +51,8 @@ public sealed class MqttConnectPacket : MqttPacket
     public bool CleanStart { get; }
 
     public ushort KeepAliveSeconds { get; }
+
+    public MqttPublishPacket WillMessage { get; }
 }
 
 public sealed class MqttConnAckPacket : MqttPacket

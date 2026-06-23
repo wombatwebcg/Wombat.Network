@@ -158,10 +158,27 @@ public sealed class MqttPacketCodec
     {
         WriteString(body, ProtocolName);
         body.Add(5);
-        body.Add(packet.CleanStart ? (byte)0x02 : (byte)0x00);
+        var flags = packet.CleanStart ? (byte)0x02 : (byte)0x00;
+        if (packet.WillMessage != null)
+        {
+            flags |= 0x04;
+            flags |= (byte)(((int)packet.WillMessage.QualityOfService & 0x03) << 3);
+            if (packet.WillMessage.Retain)
+            {
+                flags |= 0x20;
+            }
+        }
+
+        body.Add(flags);
         WriteUInt16(body, packet.KeepAliveSeconds);
         body.Add(0);
         WriteString(body, packet.ClientId);
+        if (packet.WillMessage != null)
+        {
+            body.Add(0);
+            WriteString(body, packet.WillMessage.Topic);
+            WriteBinary(body, packet.WillMessage.Payload);
+        }
     }
 
     private static void WriteConnAck(List<byte> body, MqttConnAckPacket packet)
@@ -239,7 +256,18 @@ public sealed class MqttPacketCodec
         var keepAlive = ReadUInt16(packetBytes, ref offset);
         SkipProperties(packetBytes, ref offset);
         var clientId = ReadString(packetBytes, ref offset);
-        return new MqttConnectPacket(clientId, (flags & 0x02) != 0, keepAlive);
+        MqttPublishPacket willMessage = null;
+        if ((flags & 0x04) != 0)
+        {
+            SkipProperties(packetBytes, ref offset);
+            var topic = ReadString(packetBytes, ref offset);
+            var payload = ReadBinary(packetBytes, ref offset);
+            var willQos = (MqttQualityOfService)((flags >> 3) & 0x03);
+            var willRetain = (flags & 0x20) != 0;
+            willMessage = new MqttPublishPacket(topic, payload, willQos, retain: willRetain);
+        }
+
+        return new MqttConnectPacket(clientId, (flags & 0x02) != 0, keepAlive, willMessage);
     }
 
     private static MqttPacket ReadConnAck(ReadOnlySpan<byte> packetBytes, int offset)
@@ -333,10 +361,32 @@ public sealed class MqttPacketCodec
         target.AddRange(value);
     }
 
+    private static void WriteBinary(List<byte> target, ReadOnlyMemory<byte> value)
+    {
+        WriteUInt16(target, (ushort)value.Length);
+        if (!value.IsEmpty)
+        {
+            target.AddRange(value.ToArray());
+        }
+    }
+
     private static string ReadString(ReadOnlySpan<byte> source, ref int offset)
     {
         var length = ReadUInt16(source, ref offset);
         var value = Encoding.UTF8.GetString(source.Slice(offset, length).ToArray());
+        offset += length;
+        return value;
+    }
+
+    private static ReadOnlyMemory<byte> ReadBinary(ReadOnlySpan<byte> source, ref int offset)
+    {
+        var length = ReadUInt16(source, ref offset);
+        if (length == 0)
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        var value = source.Slice(offset, length).ToArray();
         offset += length;
         return value;
     }
