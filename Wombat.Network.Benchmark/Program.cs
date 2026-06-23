@@ -8,6 +8,7 @@ var benchmarkArgs = args.Where(static arg => !string.Equals(arg, "--quick", Stri
 var summaries = BenchmarkSwitcher.FromTypes(
         [
             typeof(LengthFieldMessagePipeBenchmarks),
+            typeof(MqttPacketCodecBenchmarks),
             typeof(WebSocketFrameCodecBenchmarks),
             typeof(TcpChannelBenchmarks),
             typeof(UdpChannelBenchmarks),

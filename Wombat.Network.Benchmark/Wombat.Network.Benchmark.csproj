@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Wombat.Network\Wombat.Network.csproj" />
+    <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Protocol\Wombat.Network.Mqtt.Protocol.csproj" />
   </ItemGroup>
 
 </Project>

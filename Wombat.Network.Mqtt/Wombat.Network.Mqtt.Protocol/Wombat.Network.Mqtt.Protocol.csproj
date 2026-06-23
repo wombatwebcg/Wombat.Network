@@ -5,4 +5,10 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="System.Memory" Version="4.5.5" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.5.4" />
+    <ProjectReference Include="..\Wombat.Network.Mqtt.Abstractions\Wombat.Network.Mqtt.Abstractions.csproj" />
+  </ItemGroup>
+
 </Project>
