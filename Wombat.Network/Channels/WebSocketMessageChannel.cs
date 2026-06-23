@@ -35,7 +35,7 @@ public sealed class WebSocketMessageChannel
     public ValueTask SendPongAsync(ReadOnlyMemory<byte> payload = default, CancellationToken cancellationToken = default)
         => SendFrameAsync(_codec.EncodePong(payload, _isClient), cancellationToken);
 
-    public ValueTask SendCloseAsync(WebSockets.WebSocketCloseCode closeCode = WebSockets.WebSocketCloseCode.NormalClosure, string reason = null, CancellationToken cancellationToken = default)
+    public ValueTask SendCloseAsync(WebSocketCloseCode closeCode = WebSocketCloseCode.NormalClosure, string reason = null, CancellationToken cancellationToken = default)
         => SendFrameAsync(_codec.EncodeClose(closeCode, reason, _isClient), cancellationToken);
 
     public async ValueTask<WebSocketReceivedMessage?> ReceiveAsync(CancellationToken cancellationToken = default)

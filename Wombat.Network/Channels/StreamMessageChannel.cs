@@ -37,8 +37,9 @@ public sealed class StreamMessageChannel : IMessageChannel
             {
                 if (_messagePipe.TryRead(ref workingBuffer, out var payload))
                 {
+                    var detachedPayload = CopyPayload(payload);
                     _connection.Transport.Input.AdvanceTo(workingBuffer.Start, workingBuffer.End);
-                    return new ReceivedMessage(payload, _connection.RemoteEndPoint);
+                    return new ReceivedMessage(new ReadOnlySequence<byte>(detachedPayload), _connection.RemoteEndPoint);
                 }
 
                 if (result.IsCompleted)
@@ -59,4 +60,11 @@ public sealed class StreamMessageChannel : IMessageChannel
 
     public Task CloseAsync(CancellationToken cancellationToken = default)
         => _connection.CloseAsync(cancellationToken);
+
+    private static byte[] CopyPayload(in ReadOnlySequence<byte> payload)
+    {
+        var buffer = new byte[(int)payload.Length];
+        payload.CopyTo(buffer);
+        return buffer;
+    }
 }

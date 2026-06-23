@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Wombat.Network.Benchmark": {
+      "commandName": "Project",
+      "commandLineArgs": " --quick"
+    }
+  }
+}

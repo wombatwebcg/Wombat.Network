@@ -1,35 +1,17 @@
-﻿using System;
-
 namespace Wombat.Network.WebSockets
 {
-    public sealed class CloseFrame : ControlFrame
+    internal sealed class CloseFrame : ControlFrame
     {
-        public CloseFrame(bool isMasked = true)
+        public CloseFrame(Protocols.WebSocket.WebSocketCloseCode closeCode, string closeReason, bool isMasked = true)
         {
-            this.IsMasked = isMasked;
+            CloseCode = closeCode;
+            CloseReason = closeReason;
+            IsMasked = isMasked;
         }
 
-        public CloseFrame(WebSocketCloseCode closeCode, string closeReason, bool isMasked = true)
-            : this(isMasked)
-        {
-            this.CloseCode = closeCode;
-            this.CloseReason = closeReason;
-        }
-
-        public WebSocketCloseCode CloseCode { get; private set; }
-        public string CloseReason { get; private set; }
-        public bool IsMasked { get; private set; }
-
-        public override OpCode OpCode
-        {
-            get { return OpCode.Close; }
-        }
-
-        public byte[] ToArray(IFrameBuilder builder)
-        {
-            if (builder == null)
-                throw new ArgumentNullException("builder");
-            return builder.EncodeFrame(this);
-        }
+        public Protocols.WebSocket.WebSocketCloseCode CloseCode { get; }
+        public string CloseReason { get; }
+        public bool IsMasked { get; }
+        public override OpCode OpCode => OpCode.Close;
     }
 }

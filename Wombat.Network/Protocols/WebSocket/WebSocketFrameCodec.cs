@@ -23,7 +23,7 @@ public sealed class WebSocketFrameCodec
     public ReadOnlyMemory<byte> EncodePong(ReadOnlyMemory<byte> payload, bool isMasked)
         => _builder.EncodeFrame(new WebSockets.PongFrame(payload.IsEmpty ? null : Encoding.UTF8.GetString(payload.ToArray()), isMasked));
 
-    public ReadOnlyMemory<byte> EncodeClose(WebSockets.WebSocketCloseCode closeCode, string reason, bool isMasked)
+    public ReadOnlyMemory<byte> EncodeClose(WebSocketCloseCode closeCode, string reason, bool isMasked)
         => _builder.EncodeFrame(new WebSockets.CloseFrame(closeCode, reason, isMasked));
 
     public bool TryDecode(ref ReadOnlySequence<byte> buffer, out WebSocketReceivedMessage message)

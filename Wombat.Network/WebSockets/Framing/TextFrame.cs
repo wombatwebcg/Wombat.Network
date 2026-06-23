@@ -1,31 +1,20 @@
-﻿using System;
+using System;
 
 namespace Wombat.Network.WebSockets
 {
-    public sealed class TextFrame : DataFrame
+    internal sealed class TextFrame : DataFrame
     {
         public TextFrame(string text, bool isMasked = true)
         {
             if (string.IsNullOrEmpty(text))
-                throw new ArgumentNullException("text");
+                throw new ArgumentNullException(nameof(text));
 
-            this.Text = text;
-            this.IsMasked = isMasked;
+            Text = text;
+            IsMasked = isMasked;
         }
 
-        public string Text { get; private set; }
-        public bool IsMasked { get; private set; }
-
-        public override OpCode OpCode
-        {
-            get { return OpCode.Text; }
-        }
-
-        public byte[] ToArray(IFrameBuilder builder)
-        {
-            if (builder == null)
-                throw new ArgumentNullException("builder");
-            return builder.EncodeFrame(this);
-        }
+        public string Text { get; }
+        public bool IsMasked { get; }
+        public override OpCode OpCode => OpCode.Text;
     }
 }

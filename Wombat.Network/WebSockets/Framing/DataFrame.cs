@@ -1,6 +1,6 @@
-﻿namespace Wombat.Network.WebSockets
+namespace Wombat.Network.WebSockets
 {
-    public abstract class DataFrame : Frame
+    internal abstract class DataFrame : Frame
     {
     }
 }

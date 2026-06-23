@@ -1,33 +1,15 @@
-﻿using System;
-
 namespace Wombat.Network.WebSockets
 {
-    public sealed class PongFrame : ControlFrame
+    internal sealed class PongFrame : ControlFrame
     {
-        public PongFrame(bool isMasked = true)
-        {
-            this.IsMasked = isMasked;
-        }
-
         public PongFrame(string data, bool isMasked = true)
-            : this(isMasked)
         {
-            this.Data = data;
+            Data = data;
+            IsMasked = isMasked;
         }
 
-        public string Data { get; private set; }
-        public bool IsMasked { get; private set; }
-
-        public override OpCode OpCode
-        {
-            get { return OpCode.Pong; }
-        }
-
-        public byte[] ToArray(IFrameBuilder builder)
-        {
-            if (builder == null)
-                throw new ArgumentNullException("builder");
-            return builder.EncodeFrame(this);
-        }
+        public string Data { get; }
+        public bool IsMasked { get; }
+        public override OpCode OpCode => OpCode.Pong;
     }
 }
