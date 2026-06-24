@@ -28,6 +28,8 @@ public sealed class MqttBrokerOptions
 
     internal MqttServerCertificateOptions ServerCertificateOptions { get; private set; }
 
+    internal MqttBrokerCredentialOptions CredentialOptions { get; private set; }
+
     internal IReadOnlyList<IMqttBrokerPlugin> Plugins => _plugins;
 
     public MqttBrokerOptions ListenTcp(int port)
@@ -61,6 +63,14 @@ public sealed class MqttBrokerOptions
     public MqttBrokerOptions UseServerCertificate(X509Certificate2 certificate, bool clientCertificateRequired = false, SslProtocols enabledSslProtocols = SslProtocols.Tls12, bool checkCertificateRevocation = false)
     {
         ServerCertificateOptions = new MqttServerCertificateOptions(certificate, clientCertificateRequired, enabledSslProtocols, checkCertificateRevocation);
+        return this;
+    }
+
+    public MqttBrokerOptions UseCredentials(string username, string password)
+    {
+        CredentialOptions = string.IsNullOrWhiteSpace(username) && string.IsNullOrWhiteSpace(password)
+            ? null
+            : new MqttBrokerCredentialOptions(username, password);
         return this;
     }
 
@@ -104,6 +114,19 @@ public sealed class MqttServerCertificateOptions
     public SslProtocols EnabledSslProtocols { get; }
 
     public bool CheckCertificateRevocation { get; }
+}
+
+public sealed class MqttBrokerCredentialOptions
+{
+    public MqttBrokerCredentialOptions(string username, string password)
+    {
+        Username = username ?? string.Empty;
+        Password = password ?? string.Empty;
+    }
+
+    public string Username { get; }
+
+    public string Password { get; }
 }
 
 public interface IMqttConnectionAcceptor
@@ -216,6 +239,7 @@ public sealed class MqttBroker
     private readonly ConcurrentDictionary<string, MqttPublishPacket> _retainedMessages = new ConcurrentDictionary<string, MqttPublishPacket>(StringComparer.Ordinal);
     private readonly List<BrokerListenerRuntime> _listeners = new List<BrokerListenerRuntime>();
     private readonly IReadOnlyList<IMqttBrokerPlugin> _plugins;
+    private readonly MqttBrokerCredentialOptions _credentials;
     private readonly object _gate = new object();
     private CancellationTokenSource _listenerCancellationTokenSource;
     private Task _listenerTask;
@@ -226,6 +250,7 @@ public sealed class MqttBroker
         Options = options ?? new MqttBrokerOptions();
         _sessionStore = Options.SessionStoreFactory == null ? new InMemoryMqttSessionStore() : Options.SessionStoreFactory(new InMemoryMqttSessionStore());
         _plugins = Options.Plugins;
+        _credentials = Options.CredentialOptions;
         _logger = logger ?? NullLogger.Instance;
         LoadRetainedMessages();
     }
@@ -391,6 +416,10 @@ public sealed class MqttBroker
                 {
                     case MqttConnectPacket connect:
                         state = await HandleConnectAsync(connection, codec, connect, cancellationToken).ConfigureAwait(false);
+                        if (state == null)
+                        {
+                            return;
+                        }
                         break;
                     case MqttSubscribePacket subscribe:
                         await HandleSubscribeAsync(state, connection, codec, subscribe, cancellationToken).ConfigureAwait(false);
@@ -427,6 +456,15 @@ public sealed class MqttBroker
 
     private async Task<ClientConnectionState> HandleConnectAsync(IMqttConnection connection, MqttPacketCodec codec, MqttConnectPacket connect, CancellationToken cancellationToken)
     {
+        if (!IsAuthorized(connect))
+        {
+            var reasonCode = connect.ProtocolVersion == MqttProtocolVersion.V311 ? (byte)0x05 : (byte)0x86;
+            await connection.SendAsync(codec.Encode(new MqttConnAckPacket(reasonCode), connect.ProtocolVersion), cancellationToken).ConfigureAwait(false);
+            await connection.CloseAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogWarning("MQTT broker rejected client {ClientId} due to invalid credentials.", connect.ClientId);
+            return null;
+        }
+
         var clientId = string.IsNullOrWhiteSpace(connect.ClientId) ? Guid.NewGuid().ToString("N") : connect.ClientId;
         var existing = _sessionStore.Get(clientId);
         var session = connect.CleanStart || existing == null ? new MqttSessionState(clientId) : existing;
@@ -450,6 +488,17 @@ public sealed class MqttBroker
         }
 
         return state;
+    }
+
+    private bool IsAuthorized(MqttConnectPacket connect)
+    {
+        if (_credentials == null)
+        {
+            return true;
+        }
+
+        return string.Equals(connect?.Username ?? string.Empty, _credentials.Username, StringComparison.Ordinal) &&
+               string.Equals(connect?.Password ?? string.Empty, _credentials.Password, StringComparison.Ordinal);
     }
 
     private async Task HandleSubscribeAsync(ClientConnectionState state, IMqttConnection connection, MqttPacketCodec codec, MqttSubscribePacket subscribe, CancellationToken cancellationToken)
@@ -523,11 +572,12 @@ public sealed class MqttBroker
             return Task.CompletedTask;
         }
 
-        state.Session.Connected = false;
-        state.Session.WillMessage = null;
-        _sessionStore.Save(state.Session);
-        _connections.TryRemove(state.ClientId, out _);
-        _logger.LogInformation("MQTT broker disconnected client {ClientId}.", state.ClientId);
+        var detached = TryDetachConnection(state, clearWillMessage: true);
+        if (detached)
+        {
+            _logger.LogInformation("MQTT broker disconnected client {ClientId}.", state.ClientId);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -538,11 +588,9 @@ public sealed class MqttBroker
             return;
         }
 
-        _connections.TryRemove(state.ClientId, out _);
-        state.Session.Connected = false;
-        _sessionStore.Save(state.Session);
+        var detached = TryDetachConnection(state, clearWillMessage: false);
 
-        if (!gracefulDisconnect && state.Session.WillMessage != null)
+        if (detached && !gracefulDisconnect && state.Session.WillMessage != null)
         {
             var will = state.Session.WillMessage;
             state.Session.WillMessage = null;
@@ -649,6 +697,29 @@ public sealed class MqttBroker
         {
             throw new MqttProtocolException("CONNECT must be the first packet.");
         }
+    }
+
+    private bool TryDetachConnection(ClientConnectionState state, bool clearWillMessage)
+    {
+        if (state == null)
+        {
+            return false;
+        }
+
+        if (_connections.TryGetValue(state.ClientId, out var current) && ReferenceEquals(current, state))
+        {
+            _connections.TryRemove(state.ClientId, out _);
+            state.Session.Connected = false;
+            if (clearWillMessage)
+            {
+                state.Session.WillMessage = null;
+            }
+
+            _sessionStore.Save(state.Session);
+            return true;
+        }
+
+        return false;
     }
 
     private List<MqttPublishPacket> SnapshotRetainedMessages()

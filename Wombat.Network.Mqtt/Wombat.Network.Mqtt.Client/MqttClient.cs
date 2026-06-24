@@ -23,6 +23,10 @@ public sealed class MqttClientOptions
     public MqttPublishPacket WillMessage { get; set; }
 
     public MqttProtocolVersion ProtocolVersion { get; set; } = MqttProtocolVersion.V500;
+
+    public string Username { get; set; }
+
+    public string Password { get; set; }
 }
 
 public sealed class MqttClient
@@ -51,7 +55,7 @@ public sealed class MqttClient
 
         _connection = await _connectionFactory.ConnectAsync(_options.Endpoint, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("MQTT client connecting to {Host}:{Port} over {Scheme}.", _options.Endpoint.Host, _options.Endpoint.Port, _options.Endpoint.Scheme);
-        await SendPacketAsync(new MqttConnectPacket(_options.ClientId, _options.CleanStart, _options.KeepAliveSeconds, _options.WillMessage, _options.ProtocolVersion), cancellationToken).ConfigureAwait(false);
+        await SendPacketAsync(new MqttConnectPacket(_options.ClientId, _options.CleanStart, _options.KeepAliveSeconds, _options.WillMessage, _options.ProtocolVersion, _options.Username, _options.Password), cancellationToken).ConfigureAwait(false);
         var response = await ReceiveRequiredAsync(cancellationToken).ConfigureAwait(false);
         var connAck = response as MqttConnAckPacket;
         if (connAck == null)

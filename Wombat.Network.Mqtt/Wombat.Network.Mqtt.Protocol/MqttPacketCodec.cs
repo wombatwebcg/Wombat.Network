@@ -190,6 +190,16 @@ public sealed class MqttPacketCodec
             }
         }
 
+        if (!string.IsNullOrEmpty(packet.Password))
+        {
+            flags |= 0x40;
+        }
+
+        if (!string.IsNullOrEmpty(packet.Username))
+        {
+            flags |= 0x80;
+        }
+
         body.Add(flags);
         WriteUInt16(body, packet.KeepAliveSeconds);
         if (packet.ProtocolVersion == MqttProtocolVersion.V500)
@@ -207,6 +217,16 @@ public sealed class MqttPacketCodec
 
             WriteString(body, packet.WillMessage.Topic);
             WriteBinary(body, packet.WillMessage.Payload);
+        }
+
+        if (!string.IsNullOrEmpty(packet.Username))
+        {
+            WriteString(body, packet.Username);
+        }
+
+        if (!string.IsNullOrEmpty(packet.Password))
+        {
+            WriteString(body, packet.Password);
         }
     }
 
@@ -356,7 +376,19 @@ public sealed class MqttPacketCodec
             willMessage = new MqttPublishPacket(topic, payload, willQos, retain: willRetain);
         }
 
-        return new MqttConnectPacket(clientId, (flags & 0x02) != 0, keepAlive, willMessage, protocolVersion);
+        string username = null;
+        if ((flags & 0x80) != 0)
+        {
+            username = ReadString(packetBytes, ref offset);
+        }
+
+        string password = null;
+        if ((flags & 0x40) != 0)
+        {
+            password = ReadString(packetBytes, ref offset);
+        }
+
+        return new MqttConnectPacket(clientId, (flags & 0x02) != 0, keepAlive, willMessage, protocolVersion, username, password);
     }
 
     private static MqttPacket ReadConnAck(ReadOnlySpan<byte> packetBytes, int offset, MqttProtocolVersion protocolVersion)

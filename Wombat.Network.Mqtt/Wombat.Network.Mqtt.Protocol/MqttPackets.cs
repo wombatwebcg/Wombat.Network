@@ -47,7 +47,7 @@ public abstract class MqttPacket
 
 public sealed class MqttConnectPacket : MqttPacket
 {
-    public MqttConnectPacket(string clientId, bool cleanStart = true, ushort keepAliveSeconds = 30, MqttPublishPacket willMessage = null, MqttProtocolVersion protocolVersion = MqttProtocolVersion.V500)
+    public MqttConnectPacket(string clientId, bool cleanStart = true, ushort keepAliveSeconds = 30, MqttPublishPacket willMessage = null, MqttProtocolVersion protocolVersion = MqttProtocolVersion.V500, string username = null, string password = null)
         : base(MqttPacketType.Connect, 0)
     {
         ClientId = clientId ?? string.Empty;
@@ -55,6 +55,8 @@ public sealed class MqttConnectPacket : MqttPacket
         KeepAliveSeconds = keepAliveSeconds;
         WillMessage = willMessage;
         ProtocolVersion = protocolVersion;
+        Username = username;
+        Password = password;
     }
 
     public string ClientId { get; }
@@ -66,6 +68,10 @@ public sealed class MqttConnectPacket : MqttPacket
     public MqttPublishPacket WillMessage { get; }
 
     public MqttProtocolVersion ProtocolVersion { get; }
+
+    public string Username { get; }
+
+    public string Password { get; }
 }
 
 public sealed class MqttConnAckPacket : MqttPacket

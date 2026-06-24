@@ -382,14 +382,19 @@ LiteDB 实现建议至少覆盖：
 - `wss` 反向代理兼容维持为回归清单，不继续侵入 broker 实现
 - LiteDB trimming / AOT warning 维持文档化结论，不再强行纳入 AOT 主路径
 
-### 5.9 第三轮未收尾问题清单
+### 5.9 第三轮收尾复核（2026-06-24）
 
-按验收阻塞程度排序：
+基于当前仓库代码、测试和文档复核，原“第三轮未收尾问题清单”中的状态需要更新：
 
-1. `ws/wss` 回归测试清单与代理兼容验证仍缺失
-2. 源码生成器仍未进入“替换样板注册代码”的可用状态
-3. LiteDB 的 trimming / AOT warning 尚未清零
-4. 第三轮 benchmark 仍未补
+已完成，不再列为未收尾：
+
+1. `ws/wss` 回归测试清单已补，见 `doc\\Wombat.Network.Mqtt-ws-wss回归清单.md`
+2. 源码生成器已进入可用状态，可生成 `RegisterGeneratedPlugins()`，并有 `MqttPluginRegistrationGeneratorTests` 覆盖
+3. 第三轮最小 benchmark 已补，见 `Wombat.Network.Benchmark` 中的 `MqttPacketCodecBenchmarks`、`MqttQoS2CodecBenchmarks`
+
+保留为已知结论，不再作为第三轮阻塞项：
+
+1. LiteDB 的 trimming / AOT warning 仍存在，但已在 `doc\\Wombat.Network.Mqtt-AOT清单.md` 中明确为“可选持久化实现，不进入 NativeAOT 主发布路径承诺”
 
 ### 5.10 第三轮收尾计划
 
@@ -468,6 +473,27 @@ LiteDB 实现建议至少覆盖：
 - 第四轮优先做“清单化、结论化、样板消除”，不要再扩协议面
 - 第四轮默认不再新增新的持久化后端或新的 Broker 能力
 - 第四轮完成后，文档应能直接支撑一次预发布评审
+
+### 6.8 当前落地复核（2026-06-24）
+
+基于当前仓库复核，第四轮范围内已落地：
+
+- `ws/wss` 路径、证书、错误路径和基础收发回归清单已整理，见 `doc\\Wombat.Network.Mqtt-ws-wss回归清单.md`
+- 插件源码生成器已可生成真实插件注册样板，`RegisterGeneratedPlugins()` 已有测试覆盖
+- LiteDB 的 AOT 策略已有明确结论，见 `doc\\Wombat.Network.Mqtt-AOT清单.md`
+- 最小 benchmark 已补，`Wombat.Network.Benchmark` 已纳入 `MqttPacketCodecBenchmarks`、`MqttQoS2CodecBenchmarks`
+
+第四轮当前仍未完成：
+
+1. 代理兼容场景当前只有“回归矩阵 + 手工验证步骤”，尚无 Nginx / Caddy / IIS / YARP 的实测记录写回文档
+2. 发布前“支持范围 / 限制项 / 已知风险 / 验证记录”尚未整理成独立发布资料
+3. benchmark 已有项目和基准类型，但计划中的“发布前性能基线记录”尚未在文档中固化
+
+建议直接按以下顺序继续收口：
+
+1. 先补代理实测记录，至少给出一轮 Nginx 或 Caddy 的实际验证结果
+2. 再整理一份发布前限制项和已知风险清单
+3. 最后把当前 benchmark 运行结果固化为可复查基线
 
 ## 4. 跨轮约束
 

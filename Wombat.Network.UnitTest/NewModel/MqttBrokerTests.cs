@@ -114,6 +114,31 @@ public class MqttBrokerTests : NetworkTestBase
     }
 
     [Fact]
+    public async Task Broker_ShouldAcceptClient_WhenCredentialsMatch()
+    {
+        var broker = new MqttBroker(new MqttBrokerOptions().UseCredentials("admin", "secret"));
+        var client = new QueueMqttConnection(
+            new MqttConnectPacket("client-1", username: "admin", password: "secret"),
+            new MqttDisconnectPacket());
+
+        await broker.RunConnectionAsync(client);
+
+        client.SentPackets.OfType<MqttConnAckPacket>().Should().ContainSingle(x => x.ReasonCode == 0);
+    }
+
+    [Fact]
+    public async Task Broker_ShouldRejectClient_WhenCredentialsDoNotMatch()
+    {
+        var broker = new MqttBroker(new MqttBrokerOptions().UseCredentials("admin", "secret"));
+        var client = new QueueMqttConnection(
+            new MqttConnectPacket("client-2", username: "admin", password: "wrong"));
+
+        await broker.RunConnectionAsync(client);
+
+        client.SentPackets.OfType<MqttConnAckPacket>().Should().ContainSingle(x => x.ReasonCode == 0x86);
+    }
+
+    [Fact]
     public async Task Broker_StartAsync_ShouldAcceptTcpClients()
     {
         var port = GetAvailablePort();

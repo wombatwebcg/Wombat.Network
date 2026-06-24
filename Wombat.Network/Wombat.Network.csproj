@@ -3,7 +3,8 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <Version>1.1.5</Version>
+	<IsPackable>true</IsPackable>
+    <Version>1.1.6</Version>
     <Authors>wombatwebcg</Authors>
     <Company>wombatwebcg</Company>
     <Product>Wombat.Network</Product>

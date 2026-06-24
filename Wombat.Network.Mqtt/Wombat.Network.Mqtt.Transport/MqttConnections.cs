@@ -81,27 +81,20 @@ public sealed class MqttPipeConnection : IMqttConnection
             var buffer = result.Buffer;
             var workingBuffer = buffer;
 
-            try
+            if (_codec.TryReadPacketBytes(ref workingBuffer, out var packet))
             {
-                if (_codec.TryReadPacketBytes(ref workingBuffer, out var packet))
-                {
-                    _connection.Transport.Input.AdvanceTo(workingBuffer.Start, workingBuffer.End);
-                    return packet.ToArray();
-                }
-
-                if (result.IsCompleted)
-                {
-                    _connection.Transport.Input.AdvanceTo(buffer.End);
-                    return null;
-                }
-
-                _connection.Transport.Input.AdvanceTo(buffer.Start, buffer.End);
+                var detachedPacket = packet.ToArray();
+                _connection.Transport.Input.AdvanceTo(workingBuffer.Start, workingBuffer.End);
+                return detachedPacket;
             }
-            catch
+
+            if (result.IsCompleted)
             {
                 _connection.Transport.Input.AdvanceTo(buffer.End);
-                throw;
+                return null;
             }
+
+            _connection.Transport.Input.AdvanceTo(buffer.Start, buffer.End);
         }
     }
 
