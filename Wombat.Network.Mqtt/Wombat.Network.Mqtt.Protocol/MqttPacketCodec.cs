@@ -9,7 +9,7 @@ public sealed class MqttPacketCodec
 {
     private static readonly byte[] ProtocolName = Encoding.UTF8.GetBytes("MQTT");
 
-    public byte[] Encode(MqttPacket packet)
+    public byte[] Encode(MqttPacket packet, MqttProtocolVersion protocolVersion = MqttProtocolVersion.V500)
     {
         if (packet == null)
         {
@@ -23,26 +23,35 @@ public sealed class MqttPacketCodec
                 WriteConnect(body, connect);
                 break;
             case MqttConnAckPacket connAck:
-                WriteConnAck(body, connAck);
+                WriteConnAck(body, connAck, protocolVersion);
                 break;
             case MqttPublishPacket publish:
-                WritePublish(body, publish);
+                WritePublish(body, publish, protocolVersion);
                 break;
             case MqttPubAckPacket pubAck:
-                WritePubAck(body, pubAck);
+                WritePubAck(body, pubAck, protocolVersion);
+                break;
+            case MqttPubRecPacket pubRec:
+                WritePubRec(body, pubRec, protocolVersion);
+                break;
+            case MqttPubRelPacket pubRel:
+                WritePubRel(body, pubRel, protocolVersion);
+                break;
+            case MqttPubCompPacket pubComp:
+                WritePubComp(body, pubComp, protocolVersion);
                 break;
             case MqttSubscribePacket subscribe:
-                WriteSubscribe(body, subscribe);
+                WriteSubscribe(body, subscribe, protocolVersion);
                 break;
             case MqttSubAckPacket subAck:
-                WriteSubAck(body, subAck);
+                WriteSubAck(body, subAck, protocolVersion);
                 break;
             case MqttPingReqPacket _:
                 break;
             case MqttPingRespPacket _:
                 break;
             case MqttDisconnectPacket disconnect:
-                WriteDisconnect(body, disconnect);
+                WriteDisconnect(body, disconnect, protocolVersion);
                 break;
             default:
                 throw new NotSupportedException("Unsupported packet type: " + packet.GetType().FullName);
@@ -112,6 +121,12 @@ public sealed class MqttPacketCodec
     }
 
     public MqttPacket Decode(ReadOnlySpan<byte> packetBytes)
+        => Decode(packetBytes, MqttProtocolVersion.V500, false);
+
+    public MqttPacket Decode(ReadOnlySpan<byte> packetBytes, MqttProtocolVersion protocolVersion)
+        => Decode(packetBytes, protocolVersion, true);
+
+    private MqttPacket Decode(ReadOnlySpan<byte> packetBytes, MqttProtocolVersion protocolVersion, bool protocolVersionKnown)
     {
         if (packetBytes.Length < 2)
         {
@@ -134,21 +149,27 @@ public sealed class MqttPacketCodec
             case MqttPacketType.Connect:
                 return ReadConnect(packetBytes, offset);
             case MqttPacketType.ConnAck:
-                return ReadConnAck(packetBytes, offset);
+                return ReadConnAck(packetBytes, offset, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
             case MqttPacketType.Publish:
-                return ReadPublish(packetBytes, offset, end, flags);
+                return ReadPublish(packetBytes, offset, end, flags, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
             case MqttPacketType.PubAck:
-                return ReadPubAck(packetBytes, offset, end);
+                return ReadPubAck(packetBytes, offset, end, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
+            case MqttPacketType.PubRec:
+                return ReadPubRec(packetBytes, offset, end, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
+            case MqttPacketType.PubRel:
+                return ReadPubRel(packetBytes, offset, end, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
+            case MqttPacketType.PubComp:
+                return ReadPubComp(packetBytes, offset, end, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
             case MqttPacketType.Subscribe:
-                return ReadSubscribe(packetBytes, offset, end);
+                return ReadSubscribe(packetBytes, offset, end, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
             case MqttPacketType.SubAck:
-                return ReadSubAck(packetBytes, offset, end);
+                return ReadSubAck(packetBytes, offset, end, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
             case MqttPacketType.PingReq:
                 return new MqttPingReqPacket();
             case MqttPacketType.PingResp:
                 return new MqttPingRespPacket();
             case MqttPacketType.Disconnect:
-                return ReadDisconnect(packetBytes, offset, end);
+                return ReadDisconnect(packetBytes, offset, end, protocolVersionKnown ? protocolVersion : MqttProtocolVersion.V500);
             default:
                 throw new NotSupportedException("Unsupported packet type: " + packetType);
         }
@@ -157,7 +178,7 @@ public sealed class MqttPacketCodec
     private static void WriteConnect(List<byte> body, MqttConnectPacket packet)
     {
         WriteString(body, ProtocolName);
-        body.Add(5);
+        body.Add((byte)packet.ProtocolVersion);
         var flags = packet.CleanStart ? (byte)0x02 : (byte)0x00;
         if (packet.WillMessage != null)
         {
@@ -171,24 +192,35 @@ public sealed class MqttPacketCodec
 
         body.Add(flags);
         WriteUInt16(body, packet.KeepAliveSeconds);
-        body.Add(0);
+        if (packet.ProtocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(0);
+        }
+
         WriteString(body, packet.ClientId);
         if (packet.WillMessage != null)
         {
-            body.Add(0);
+            if (packet.ProtocolVersion == MqttProtocolVersion.V500)
+            {
+                body.Add(0);
+            }
+
             WriteString(body, packet.WillMessage.Topic);
             WriteBinary(body, packet.WillMessage.Payload);
         }
     }
 
-    private static void WriteConnAck(List<byte> body, MqttConnAckPacket packet)
+    private static void WriteConnAck(List<byte> body, MqttConnAckPacket packet, MqttProtocolVersion protocolVersion)
     {
         body.Add(packet.SessionPresent ? (byte)0x01 : (byte)0x00);
         body.Add(packet.ReasonCode);
-        body.Add(0);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(0);
+        }
     }
 
-    private static void WritePublish(List<byte> body, MqttPublishPacket packet)
+    private static void WritePublish(List<byte> body, MqttPublishPacket packet, MqttProtocolVersion protocolVersion)
     {
         WriteString(body, packet.Topic);
         if (packet.QualityOfService != MqttQualityOfService.AtMostOnce)
@@ -196,24 +228,65 @@ public sealed class MqttPacketCodec
             WriteUInt16(body, packet.PacketIdentifier);
         }
 
-        body.Add(0);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(0);
+        }
+
         if (!packet.Payload.IsEmpty)
         {
             body.AddRange(packet.Payload.ToArray());
         }
     }
 
-    private static void WritePubAck(List<byte> body, MqttPubAckPacket packet)
+    private static void WritePubAck(List<byte> body, MqttPubAckPacket packet, MqttProtocolVersion protocolVersion)
     {
         WriteUInt16(body, packet.PacketIdentifier);
-        body.Add(packet.ReasonCode);
-        body.Add(0);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(packet.ReasonCode);
+            body.Add(0);
+        }
     }
 
-    private static void WriteSubscribe(List<byte> body, MqttSubscribePacket packet)
+    private static void WritePubRec(List<byte> body, MqttPubRecPacket packet, MqttProtocolVersion protocolVersion)
     {
         WriteUInt16(body, packet.PacketIdentifier);
-        body.Add(0);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(packet.ReasonCode);
+            body.Add(0);
+        }
+    }
+
+    private static void WritePubRel(List<byte> body, MqttPubRelPacket packet, MqttProtocolVersion protocolVersion)
+    {
+        WriteUInt16(body, packet.PacketIdentifier);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(packet.ReasonCode);
+            body.Add(0);
+        }
+    }
+
+    private static void WritePubComp(List<byte> body, MqttPubCompPacket packet, MqttProtocolVersion protocolVersion)
+    {
+        WriteUInt16(body, packet.PacketIdentifier);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(packet.ReasonCode);
+            body.Add(0);
+        }
+    }
+
+    private static void WriteSubscribe(List<byte> body, MqttSubscribePacket packet, MqttProtocolVersion protocolVersion)
+    {
+        WriteUInt16(body, packet.PacketIdentifier);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(0);
+        }
+
         for (var i = 0; i < packet.Subscriptions.Count; i++)
         {
             var subscription = packet.Subscriptions[i];
@@ -222,20 +295,27 @@ public sealed class MqttPacketCodec
         }
     }
 
-    private static void WriteSubAck(List<byte> body, MqttSubAckPacket packet)
+    private static void WriteSubAck(List<byte> body, MqttSubAckPacket packet, MqttProtocolVersion protocolVersion)
     {
         WriteUInt16(body, packet.PacketIdentifier);
-        body.Add(0);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(0);
+        }
+
         for (var i = 0; i < packet.ReasonCodes.Count; i++)
         {
             body.Add(packet.ReasonCodes[i]);
         }
     }
 
-    private static void WriteDisconnect(List<byte> body, MqttDisconnectPacket packet)
+    private static void WriteDisconnect(List<byte> body, MqttDisconnectPacket packet, MqttProtocolVersion protocolVersion)
     {
-        body.Add(packet.ReasonCode);
-        body.Add(0);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            body.Add(packet.ReasonCode);
+            body.Add(0);
+        }
     }
 
     private static MqttPacket ReadConnect(ReadOnlySpan<byte> packetBytes, int offset)
@@ -247,19 +327,28 @@ public sealed class MqttPacketCodec
         }
 
         var version = packetBytes[offset++];
-        if (version != 5)
+        if (version != (byte)MqttProtocolVersion.V500 && version != (byte)MqttProtocolVersion.V311)
         {
             throw new InvalidOperationException("Unsupported MQTT version.");
         }
 
         var flags = packetBytes[offset++];
         var keepAlive = ReadUInt16(packetBytes, ref offset);
-        SkipProperties(packetBytes, ref offset);
+        var protocolVersion = (MqttProtocolVersion)version;
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            SkipProperties(packetBytes, ref offset);
+        }
+
         var clientId = ReadString(packetBytes, ref offset);
         MqttPublishPacket willMessage = null;
         if ((flags & 0x04) != 0)
         {
-            SkipProperties(packetBytes, ref offset);
+            if (protocolVersion == MqttProtocolVersion.V500)
+            {
+                SkipProperties(packetBytes, ref offset);
+            }
+
             var topic = ReadString(packetBytes, ref offset);
             var payload = ReadBinary(packetBytes, ref offset);
             var willQos = (MqttQualityOfService)((flags >> 3) & 0x03);
@@ -267,18 +356,22 @@ public sealed class MqttPacketCodec
             willMessage = new MqttPublishPacket(topic, payload, willQos, retain: willRetain);
         }
 
-        return new MqttConnectPacket(clientId, (flags & 0x02) != 0, keepAlive, willMessage);
+        return new MqttConnectPacket(clientId, (flags & 0x02) != 0, keepAlive, willMessage, protocolVersion);
     }
 
-    private static MqttPacket ReadConnAck(ReadOnlySpan<byte> packetBytes, int offset)
+    private static MqttPacket ReadConnAck(ReadOnlySpan<byte> packetBytes, int offset, MqttProtocolVersion protocolVersion)
     {
         var acknowledgeFlags = packetBytes[offset++];
         var reasonCode = packetBytes[offset++];
-        SkipProperties(packetBytes, ref offset);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            SkipProperties(packetBytes, ref offset);
+        }
+
         return new MqttConnAckPacket(reasonCode, (acknowledgeFlags & 0x01) != 0);
     }
 
-    private static MqttPacket ReadPublish(ReadOnlySpan<byte> packetBytes, int offset, int end, byte flags)
+    private static MqttPacket ReadPublish(ReadOnlySpan<byte> packetBytes, int offset, int end, byte flags, MqttProtocolVersion protocolVersion)
     {
         var topic = ReadString(packetBytes, ref offset);
         var qos = (MqttQualityOfService)((flags >> 1) & 0x03);
@@ -288,28 +381,88 @@ public sealed class MqttPacketCodec
             packetIdentifier = ReadUInt16(packetBytes, ref offset);
         }
 
-        SkipProperties(packetBytes, ref offset);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            SkipProperties(packetBytes, ref offset);
+        }
+
         var payloadLength = end - offset;
         var payload = payloadLength == 0 ? ReadOnlyMemory<byte>.Empty : new ReadOnlyMemory<byte>(packetBytes.Slice(offset, payloadLength).ToArray());
         return new MqttPublishPacket(topic, payload, qos, packetIdentifier, (flags & 0x01) != 0, (flags & 0x08) != 0);
     }
 
-    private static MqttPacket ReadPubAck(ReadOnlySpan<byte> packetBytes, int offset, int end)
+    private static MqttPacket ReadPubAck(ReadOnlySpan<byte> packetBytes, int offset, int end, MqttProtocolVersion protocolVersion)
     {
         var packetIdentifier = ReadUInt16(packetBytes, ref offset);
-        var reasonCode = offset < end ? packetBytes[offset++] : (byte)0;
-        if (offset < end)
+        var reasonCode = (byte)0;
+        if (protocolVersion == MqttProtocolVersion.V500 && offset < end)
         {
-            SkipProperties(packetBytes, ref offset);
+            reasonCode = packetBytes[offset++];
+            if (offset < end)
+            {
+                SkipProperties(packetBytes, ref offset);
+            }
         }
 
         return new MqttPubAckPacket(packetIdentifier, reasonCode);
     }
 
-    private static MqttPacket ReadSubscribe(ReadOnlySpan<byte> packetBytes, int offset, int end)
+    private static MqttPacket ReadPubRec(ReadOnlySpan<byte> packetBytes, int offset, int end, MqttProtocolVersion protocolVersion)
     {
         var packetIdentifier = ReadUInt16(packetBytes, ref offset);
-        SkipProperties(packetBytes, ref offset);
+        var reasonCode = (byte)0;
+        if (protocolVersion == MqttProtocolVersion.V500 && offset < end)
+        {
+            reasonCode = packetBytes[offset++];
+            if (offset < end)
+            {
+                SkipProperties(packetBytes, ref offset);
+            }
+        }
+
+        return new MqttPubRecPacket(packetIdentifier, reasonCode);
+    }
+
+    private static MqttPacket ReadPubRel(ReadOnlySpan<byte> packetBytes, int offset, int end, MqttProtocolVersion protocolVersion)
+    {
+        var packetIdentifier = ReadUInt16(packetBytes, ref offset);
+        var reasonCode = (byte)0;
+        if (protocolVersion == MqttProtocolVersion.V500 && offset < end)
+        {
+            reasonCode = packetBytes[offset++];
+            if (offset < end)
+            {
+                SkipProperties(packetBytes, ref offset);
+            }
+        }
+
+        return new MqttPubRelPacket(packetIdentifier, reasonCode);
+    }
+
+    private static MqttPacket ReadPubComp(ReadOnlySpan<byte> packetBytes, int offset, int end, MqttProtocolVersion protocolVersion)
+    {
+        var packetIdentifier = ReadUInt16(packetBytes, ref offset);
+        var reasonCode = (byte)0;
+        if (protocolVersion == MqttProtocolVersion.V500 && offset < end)
+        {
+            reasonCode = packetBytes[offset++];
+            if (offset < end)
+            {
+                SkipProperties(packetBytes, ref offset);
+            }
+        }
+
+        return new MqttPubCompPacket(packetIdentifier, reasonCode);
+    }
+
+    private static MqttPacket ReadSubscribe(ReadOnlySpan<byte> packetBytes, int offset, int end, MqttProtocolVersion protocolVersion)
+    {
+        var packetIdentifier = ReadUInt16(packetBytes, ref offset);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            SkipProperties(packetBytes, ref offset);
+        }
+
         var subscriptions = new List<MqttSubscription>();
         while (offset < end)
         {
@@ -321,10 +474,14 @@ public sealed class MqttPacketCodec
         return new MqttSubscribePacket(packetIdentifier, subscriptions);
     }
 
-    private static MqttPacket ReadSubAck(ReadOnlySpan<byte> packetBytes, int offset, int end)
+    private static MqttPacket ReadSubAck(ReadOnlySpan<byte> packetBytes, int offset, int end, MqttProtocolVersion protocolVersion)
     {
         var packetIdentifier = ReadUInt16(packetBytes, ref offset);
-        SkipProperties(packetBytes, ref offset);
+        if (protocolVersion == MqttProtocolVersion.V500)
+        {
+            SkipProperties(packetBytes, ref offset);
+        }
+
         var reasonCodes = new List<byte>();
         while (offset < end)
         {
@@ -334,9 +491,14 @@ public sealed class MqttPacketCodec
         return new MqttSubAckPacket(packetIdentifier, reasonCodes);
     }
 
-    private static MqttPacket ReadDisconnect(ReadOnlySpan<byte> packetBytes, int offset, int end)
+    private static MqttPacket ReadDisconnect(ReadOnlySpan<byte> packetBytes, int offset, int end, MqttProtocolVersion protocolVersion)
     {
         if (offset >= end)
+        {
+            return new MqttDisconnectPacket();
+        }
+
+        if (protocolVersion == MqttProtocolVersion.V311)
         {
             return new MqttDisconnectPacket();
         }

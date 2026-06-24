@@ -21,6 +21,8 @@ public sealed class MqttClientOptions
     public bool CleanStart { get; set; } = true;
 
     public MqttPublishPacket WillMessage { get; set; }
+
+    public MqttProtocolVersion ProtocolVersion { get; set; } = MqttProtocolVersion.V500;
 }
 
 public sealed class MqttClient
@@ -49,7 +51,7 @@ public sealed class MqttClient
 
         _connection = await _connectionFactory.ConnectAsync(_options.Endpoint, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("MQTT client connecting to {Host}:{Port} over {Scheme}.", _options.Endpoint.Host, _options.Endpoint.Port, _options.Endpoint.Scheme);
-        await SendPacketAsync(new MqttConnectPacket(_options.ClientId, _options.CleanStart, _options.KeepAliveSeconds, _options.WillMessage), cancellationToken).ConfigureAwait(false);
+        await SendPacketAsync(new MqttConnectPacket(_options.ClientId, _options.CleanStart, _options.KeepAliveSeconds, _options.WillMessage, _options.ProtocolVersion), cancellationToken).ConfigureAwait(false);
         var response = await ReceiveRequiredAsync(cancellationToken).ConfigureAwait(false);
         var connAck = response as MqttConnAckPacket;
         if (connAck == null)
@@ -74,7 +76,7 @@ public sealed class MqttClient
 
     public async Task PublishAsync(string topic, ReadOnlyMemory<byte> payload, MqttQualityOfService qualityOfService = MqttQualityOfService.AtMostOnce, bool retain = false, CancellationToken cancellationToken = default)
     {
-        var packetIdentifier = qualityOfService == MqttQualityOfService.AtLeastOnce ? NextPacketIdentifier() : (ushort)0;
+        var packetIdentifier = qualityOfService == MqttQualityOfService.AtMostOnce ? (ushort)0 : NextPacketIdentifier();
         await SendPacketAsync(new MqttPublishPacket(topic, payload, qualityOfService, packetIdentifier, retain), cancellationToken).ConfigureAwait(false);
         if (qualityOfService == MqttQualityOfService.AtLeastOnce)
         {
@@ -83,6 +85,23 @@ public sealed class MqttClient
             if (pubAck == null || pubAck.PacketIdentifier != packetIdentifier)
             {
                 throw new MqttClientException("Expected matching PUBACK.");
+            }
+        }
+        else if (qualityOfService == MqttQualityOfService.ExactlyOnce)
+        {
+            var response = await ReceiveRequiredAsync(cancellationToken).ConfigureAwait(false);
+            var pubRec = response as MqttPubRecPacket;
+            if (pubRec == null || pubRec.PacketIdentifier != packetIdentifier)
+            {
+                throw new MqttClientException("Expected matching PUBREC.");
+            }
+
+            await SendPacketAsync(new MqttPubRelPacket(packetIdentifier), cancellationToken).ConfigureAwait(false);
+            response = await ReceiveRequiredAsync(cancellationToken).ConfigureAwait(false);
+            var pubComp = response as MqttPubCompPacket;
+            if (pubComp == null || pubComp.PacketIdentifier != packetIdentifier)
+            {
+                throw new MqttClientException("Expected matching PUBCOMP.");
             }
         }
 
@@ -148,7 +167,7 @@ public sealed class MqttClient
             throw new MqttClientException("Client is not connected.");
         }
 
-        await _connection.SendAsync(_codec.Encode(packet), cancellationToken).ConfigureAwait(false);
+        await _connection.SendAsync(_codec.Encode(packet, _options.ProtocolVersion), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<MqttPacket> ReceiveRequiredAsync(CancellationToken cancellationToken)
@@ -164,7 +183,7 @@ public sealed class MqttClient
             throw new MqttClientException("Connection closed.");
         }
 
-        return _codec.Decode(payload.Value.Span);
+        return _codec.Decode(payload.Value.Span, _options.ProtocolVersion);
     }
 
     private async Task<MqttSubAckPacket> SubscribeCoreAsync(IReadOnlyList<MqttSubscription> subscriptions, CancellationToken cancellationToken)

@@ -526,9 +526,42 @@ namespace Pipelines.Sockets.Unofficial
                 var pendingRead = PendingRead;
                 lock (pendingRead.SyncLock)
                 {
-                    var result = pendingRead.ReadAwaiter.GetResult();
-                    pendingRead.ReadAwaiter = default;
-                    ConsumeBytesAndExecuteContiuations(result);
+                    try
+                    {
+                        var result = pendingRead.ReadAwaiter.GetResult();
+                        pendingRead.ReadAwaiter = default;
+                        ConsumeBytesAndExecuteContiuations(result);
+                    }
+                    catch (Exception ex)
+                    {
+                        pendingRead.ReadAwaiter = default;
+                        FailPendingRead(ex);
+                    }
+                }
+            }
+
+            private void FailPendingRead(Exception ex)
+            {
+                var pendingRead = PendingRead;
+                switch (pendingRead.AsyncMode)
+                {
+                    case PendingAsyncMode.Task:
+                        var task = pendingRead.TaskSource;
+                        pendingRead.TaskSource = null;
+                        pendingRead.ConsumeBytesReadAndReset();
+                        if (task != null)
+                        {
+                            task.TrySetException(ex);
+                        }
+                        break;
+                    case PendingAsyncMode.AsyncCallback:
+                        pendingRead.SetBytesRead(0, true);
+                        pendingRead.ExecuteCallback();
+                        break;
+                    case PendingAsyncMode.Synchronous:
+                        pendingRead.SetBytesRead(0, true);
+                        Monitor.PulseAll(pendingRead.SyncLock);
+                        break;
                 }
             }
             private void ConsumeBytesAndExecuteContiuations(ReadResult result)

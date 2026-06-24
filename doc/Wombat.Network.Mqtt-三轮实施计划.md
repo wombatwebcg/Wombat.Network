@@ -339,6 +339,136 @@ LiteDB 实现建议至少覆盖：
 - 如果 WebSocket 握手细节侵入协议层，会让传输边界失控
 - 源码生成器若做太多，会增加维护成本和调试难度
 
+### 5.7 第三轮当前落地状态（2026-06-23）
+
+本轮已落地：
+
+- `Broker` 已从 `object` 插件占位收口到显式 `IMqttBrokerPlugin` 契约与最小执行管线
+- `Persistence.LiteDb` 已补 `LiteDbMqttSessionStore`，可持久化 Session、订阅、Inflight 元数据和 Will 元数据
+- `Persistence.LiteDb` 已补 retained 消息持久化，broker 启动时可预加载 retained 数据
+- `Protocol` 已补 MQTT 3.1.1 `CONNECT` 兼容入口，当前按兼容层策略只在接入边界保留协议版本差异
+- `Generators` 已补源码生成器首版，占位 `RegisterGeneratedPlugins` 扩展，避免继续走运行时反射扫描方向
+- `Broker` 已补全局服务端证书配置，`ListenTls` / `ListenWebSocketSecure` 已接到真实 TLS/WSS listener
+- `Transport` 已补 TLS 客户端证书验证回调入口，便于测试和自定义证书校验策略
+- `ws/wss` 已补基础路径校验，错误路径会在接入边界拒绝
+- `Protocol` / `Client` / `Broker` 已补 QoS2 基础报文与最小 Exactly Once 主路径
+- 已补 TLS / WSS 冒烟测试
+- 已补 QoS2 roundtrip、client 流程和 broker 端到端回归测试
+- 已补 broker 重启后 persistent session 与 retained 消息恢复测试
+- 已补 `Wombat.Network.Mqtt.AotSmoke`，`win-x64` NativeAOT publish 与产物启动通过
+- 已形成 AOT / trimming 清单，见 `doc\\Wombat.Network.Mqtt-AOT清单.md`
+- 已补 MQTT 相关回归测试，当前 `dotnet test Wombat.Network.UnitTest\\Wombat.Network.UnitTest.csproj --filter "Mqtt"` 通过
+
+本轮未落地：
+
+- `wss` 场景下的反向代理兼容校验未补
+- 源码生成器当前仅为首版占位，尚未生成真实插件注册表或映射表
+- LiteDB 仍存在 trimming / AOT warning，尚未从 AOT 主路径风险中彻底隔离
+- 第三轮 benchmark 未补
+
+### 5.8 第三轮收尾状态（2026-06-24）
+
+本轮追加完成：
+
+- `Generators` 已从占位扩展收口到可用的插件注册生成器
+- 新增 `[MqttBrokerPlugin]` 显式标记，生成器可为带无参构造函数的插件类型生成 `RegisterGeneratedPlugins()`
+- 已补生成器验证测试，覆盖“标记插件 -> 自动注册 -> broker 执行插件回调”主路径
+- 已补 `ws/wss` 回归清单，见 `doc\\Wombat.Network.Mqtt-ws-wss回归清单.md`
+- 已明确 LiteDB AOT 定位，见 `doc\\Wombat.Network.Mqtt-AOT清单.md`
+- 已补第三轮最小 benchmark：QoS2 编解码基线
+
+第三轮剩余不再作为阻塞项：
+
+- `wss` 反向代理兼容维持为回归清单，不继续侵入 broker 实现
+- LiteDB trimming / AOT warning 维持文档化结论，不再强行纳入 AOT 主路径
+
+### 5.9 第三轮未收尾问题清单
+
+按验收阻塞程度排序：
+
+1. `ws/wss` 回归测试清单与代理兼容验证仍缺失
+2. 源码生成器仍未进入“替换样板注册代码”的可用状态
+3. LiteDB 的 trimming / AOT warning 尚未清零
+4. 第三轮 benchmark 仍未补
+
+### 5.10 第三轮收尾计划
+
+建议按下面顺序收尾，不并行铺太多面：
+
+1. 先收源码生成器增强和回归清单
+   - 让 generator 生成真实插件注册表
+   - 整理 `ws/wss` 路径、代理、证书组合回归清单
+   - 补最小 benchmark
+2. 最后决定 LiteDB 的 AOT 策略
+   - 接受 warning 并文档化为非阻塞项，或
+   - 把 LiteDB 从 AOT 主路径中隔离
+
+### 5.11 第三轮收尾判断（2026-06-24）
+
+当前判断：
+
+- 第三轮“插件化、持久化、3.1.1 兼容入口、生成器可用化、Session/Retain 重启恢复主路径、TLS/WSS 主接入路径、QoS2 基础主路径、AOT smoke 验证、`ws/wss` 回归清单、LiteDB AOT 定位、最小 benchmark”已经落地
+- 第三轮当前已完成收尾，不再额外扩协议面或持久化后端
+- 第四轮只需要围绕发布前清单、代理实测记录和工程化资料继续整理
+
+## 第四轮：发布前收口与工程化
+
+### 6.1 目标
+
+把库从“第三轮已可运行、已可验证”推进到“可稳定发布、可明确边界、可持续维护”。
+
+### 6.2 范围
+
+- 补齐 `ws/wss` 路径、代理、证书组合回归清单
+- 让源码生成器从占位扩展进入可用状态
+- 明确 LiteDB 在 NativeAOT / trimming 下的定位
+- 补最小 benchmark 与发布前性能基线
+- 整理发布前文档、限制项和已知风险
+
+### 6.3 交付物
+
+- `ws/wss` 代理兼容回归清单
+- 可生成真实插件注册表的 generator
+- LiteDB 的 AOT 策略结论
+- 最小 benchmark 与基线记录
+- 发布前已知限制清单
+
+### 6.4 建议实现顺序
+
+1. 先补 `ws/wss` 回归清单
+   - 覆盖路径不匹配
+   - 覆盖反向代理透传
+   - 覆盖 TLS/WSS 证书组合
+2. 再让 generator 可用化
+   - 生成真实插件注册样板
+   - 用生成结果替代手写占位扩展
+3. 再定 LiteDB AOT 策略
+   - 若接受 warning，则文档化为非阻塞项
+   - 若不接受 warning，则把 LiteDB 从 AOT 主路径隔离
+4. 最后补 benchmark 和发布文档
+   - 固定一组 publish / subscribe / retain 基线
+   - 形成发布前限制项和验证记录
+
+### 6.5 验收标准
+
+- `ws/wss` 在计划清单内的代理场景有明确验证结果
+- 插件注册不再依赖手写占位扩展
+- LiteDB 的 AOT 定位有明确结论，不再处于悬而未决状态
+- 有至少一份可重复执行的 benchmark 结果
+- 发布前文档能明确说明支持范围、限制项和已知风险
+
+### 6.6 风险与控制
+
+- 若第四轮同时改代理兼容、生成器和持久化策略，回归面会迅速变大
+- 若 benchmark 目标先定得过高，会拖慢发布收口
+- 若 LiteDB AOT 策略不先定，后续发布说明会持续摇摆
+
+### 6.7 当前建议
+
+- 第四轮优先做“清单化、结论化、样板消除”，不要再扩协议面
+- 第四轮默认不再新增新的持久化后端或新的 Broker 能力
+- 第四轮完成后，文档应能直接支撑一次预发布评审
+
 ## 4. 跨轮约束
 
 以下约束三轮都要持续执行：

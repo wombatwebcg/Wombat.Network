@@ -1,4 +1,5 @@
 using System;
+using System.Net.Security;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,7 +15,7 @@ public enum MqttTransportScheme
 
 public sealed class MqttEndpoint
 {
-    public MqttEndpoint(string host, int port, MqttTransportScheme scheme = MqttTransportScheme.Tcp, string path = "/mqtt")
+    public MqttEndpoint(string host, int port, MqttTransportScheme scheme = MqttTransportScheme.Tcp, string path = "/mqtt", RemoteCertificateValidationCallback serverCertificateValidationCallback = null)
     {
         if (string.IsNullOrWhiteSpace(host))
         {
@@ -30,6 +31,7 @@ public sealed class MqttEndpoint
         Port = port;
         Scheme = scheme;
         Path = string.IsNullOrWhiteSpace(path) ? "/" : path;
+        ServerCertificateValidationCallback = serverCertificateValidationCallback;
     }
 
     public string Host { get; }
@@ -39,6 +41,8 @@ public sealed class MqttEndpoint
     public MqttTransportScheme Scheme { get; }
 
     public string Path { get; }
+
+    public RemoteCertificateValidationCallback ServerCertificateValidationCallback { get; }
 }
 
 public interface IMqttConnection

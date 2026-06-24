@@ -9,6 +9,7 @@ var summaries = BenchmarkSwitcher.FromTypes(
         [
             typeof(LengthFieldMessagePipeBenchmarks),
             typeof(MqttPacketCodecBenchmarks),
+            typeof(MqttQoS2CodecBenchmarks),
             typeof(WebSocketFrameCodecBenchmarks),
             typeof(TcpChannelBenchmarks),
             typeof(UdpChannelBenchmarks),

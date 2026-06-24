@@ -57,6 +57,48 @@ public class MqttPacketCodecTests
     }
 
     [Fact]
+    public void EncodeDecode_ConnectV311_ShouldRoundTrip()
+    {
+        var codec = new MqttPacketCodec();
+        var packet = new MqttConnectPacket("client-311", false, 60, protocolVersion: MqttProtocolVersion.V311);
+
+        var encoded = codec.Encode(packet);
+        var decoded = (MqttConnectPacket)codec.Decode(encoded);
+
+        decoded.ClientId.Should().Be("client-311");
+        decoded.CleanStart.Should().BeFalse();
+        decoded.KeepAliveSeconds.Should().Be(60);
+        decoded.ProtocolVersion.Should().Be(MqttProtocolVersion.V311);
+    }
+
+    [Fact]
+    public void EncodeDecode_QoS2Acks_ShouldRoundTrip()
+    {
+        var codec = new MqttPacketCodec();
+
+        ((MqttPubRecPacket)codec.Decode(codec.Encode(new MqttPubRecPacket(9)))).PacketIdentifier.Should().Be(9);
+        ((MqttPubRelPacket)codec.Decode(codec.Encode(new MqttPubRelPacket(10)))).PacketIdentifier.Should().Be(10);
+        ((MqttPubCompPacket)codec.Decode(codec.Encode(new MqttPubCompPacket(11)))).PacketIdentifier.Should().Be(11);
+    }
+
+    [Fact]
+    public void EncodeDecode_V311Packets_ShouldOmitV500Properties()
+    {
+        var codec = new MqttPacketCodec();
+        var publishBytes = codec.Encode(new MqttPublishPacket("demo/topic", Encoding.UTF8.GetBytes("abc"), MqttQualityOfService.AtLeastOnce, 9, retain: true), MqttProtocolVersion.V311);
+        var subAckBytes = codec.Encode(new MqttSubAckPacket(7, new byte[] { 1 }), MqttProtocolVersion.V311);
+        var disconnectBytes = codec.Encode(new MqttDisconnectPacket(), MqttProtocolVersion.V311);
+
+        ((MqttPublishPacket)codec.Decode(publishBytes, MqttProtocolVersion.V311)).PacketIdentifier.Should().Be(9);
+        ((MqttSubAckPacket)codec.Decode(subAckBytes, MqttProtocolVersion.V311)).PacketIdentifier.Should().Be(7);
+        codec.Decode(disconnectBytes, MqttProtocolVersion.V311).Should().BeOfType<MqttDisconnectPacket>();
+
+        publishBytes[1].Should().Be(17);
+        subAckBytes[1].Should().Be(3);
+        disconnectBytes[1].Should().Be(0);
+    }
+
+    [Fact]
     public void TryReadPacketBytes_WithTwoFrames_ShouldReadOneByOne()
     {
         var codec = new MqttPacketCodec();

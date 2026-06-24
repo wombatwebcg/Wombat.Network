@@ -33,6 +33,8 @@
     <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Transport\Wombat.Network.Mqtt.Transport.csproj" />
     <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Client\Wombat.Network.Mqtt.Client.csproj" />
     <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Broker\Wombat.Network.Mqtt.Broker.csproj" />
+    <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Persistence.LiteDb\Wombat.Network.Mqtt.Persistence.LiteDb.csproj" />
+    <ProjectReference Include="..\Wombat.Network.Mqtt\Wombat.Network.Mqtt.Generators\Wombat.Network.Mqtt.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -12,16 +14,21 @@ using Wombat.Network.Mqtt.Protocol;
 using Wombat.Network.Mqtt.Transport;
 using Wombat.Network.Transports.Abstractions;
 using Wombat.Network.Transports.Tcp;
+using Wombat.Network.Transports.Tls;
 
 namespace Wombat.Network.Mqtt.Broker;
 
 public sealed class MqttBrokerOptions
 {
+    private readonly List<IMqttBrokerPlugin> _plugins = new List<IMqttBrokerPlugin>();
+
     internal List<MqttListenerRegistration> Listeners { get; } = new List<MqttListenerRegistration>();
 
     internal Func<IMqttSessionStore, IMqttSessionStore> SessionStoreFactory { get; private set; }
 
-    internal List<object> Plugins { get; } = new List<object>();
+    internal MqttServerCertificateOptions ServerCertificateOptions { get; private set; }
+
+    internal IReadOnlyList<IMqttBrokerPlugin> Plugins => _plugins;
 
     public MqttBrokerOptions ListenTcp(int port)
         => Listen(MqttTransportScheme.Tcp, port);
@@ -35,11 +42,11 @@ public sealed class MqttBrokerOptions
     public MqttBrokerOptions ListenWebSocketSecure(int port, string path = "/mqtt")
         => Listen(MqttTransportScheme.WebSocketSecure, port, path);
 
-    public MqttBrokerOptions UsePlugin(object plugin)
+    public MqttBrokerOptions UsePlugin(IMqttBrokerPlugin plugin)
     {
         if (plugin != null)
         {
-            Plugins.Add(plugin);
+            _plugins.Add(plugin);
         }
 
         return this;
@@ -48,6 +55,12 @@ public sealed class MqttBrokerOptions
     public MqttBrokerOptions UseSessionStore(IMqttSessionStore sessionStore)
     {
         SessionStoreFactory = _ => sessionStore ?? new InMemoryMqttSessionStore();
+        return this;
+    }
+
+    public MqttBrokerOptions UseServerCertificate(X509Certificate2 certificate, bool clientCertificateRequired = false, SslProtocols enabledSslProtocols = SslProtocols.Tls12, bool checkCertificateRevocation = false)
+    {
+        ServerCertificateOptions = new MqttServerCertificateOptions(certificate, clientCertificateRequired, enabledSslProtocols, checkCertificateRevocation);
         return this;
     }
 
@@ -74,6 +87,25 @@ public sealed class MqttListenerRegistration
     public string Path { get; }
 }
 
+public sealed class MqttServerCertificateOptions
+{
+    public MqttServerCertificateOptions(X509Certificate2 certificate, bool clientCertificateRequired, SslProtocols enabledSslProtocols, bool checkCertificateRevocation)
+    {
+        Certificate = certificate ?? throw new ArgumentNullException(nameof(certificate));
+        ClientCertificateRequired = clientCertificateRequired;
+        EnabledSslProtocols = enabledSslProtocols;
+        CheckCertificateRevocation = checkCertificateRevocation;
+    }
+
+    public X509Certificate2 Certificate { get; }
+
+    public bool ClientCertificateRequired { get; }
+
+    public SslProtocols EnabledSslProtocols { get; }
+
+    public bool CheckCertificateRevocation { get; }
+}
+
 public interface IMqttConnectionAcceptor
 {
     Task<IMqttConnection> AcceptAsync(CancellationToken cancellationToken = default);
@@ -83,9 +115,17 @@ public interface IMqttSessionStore
 {
     MqttSessionState Get(string clientId);
 
+    IReadOnlyCollection<MqttSessionState> GetAll();
+
     void Save(MqttSessionState session);
 
     void Remove(string clientId);
+
+    IReadOnlyCollection<MqttPublishPacket> GetRetainedMessages();
+
+    void SaveRetainedMessage(MqttPublishPacket message);
+
+    void RemoveRetainedMessage(string topic);
 }
 
 public sealed class InMemoryMqttSessionStore : IMqttSessionStore
@@ -97,6 +137,9 @@ public sealed class InMemoryMqttSessionStore : IMqttSessionStore
         _sessions.TryGetValue(clientId ?? string.Empty, out var session);
         return session;
     }
+
+    public IReadOnlyCollection<MqttSessionState> GetAll()
+        => _sessions.Values.ToArray();
 
     public void Save(MqttSessionState session)
     {
@@ -117,6 +160,17 @@ public sealed class InMemoryMqttSessionStore : IMqttSessionStore
 
         _sessions.TryRemove(clientId, out _);
     }
+
+    public IReadOnlyCollection<MqttPublishPacket> GetRetainedMessages()
+        => Array.Empty<MqttPublishPacket>();
+
+    public void SaveRetainedMessage(MqttPublishPacket message)
+    {
+    }
+
+    public void RemoveRetainedMessage(string topic)
+    {
+    }
 }
 
 public sealed class MqttSessionState
@@ -125,6 +179,7 @@ public sealed class MqttSessionState
     {
         ClientId = clientId ?? string.Empty;
         Subscriptions = new List<MqttSubscription>();
+        InflightMessages = new List<MqttInflightState>();
     }
 
     public string ClientId { get; }
@@ -134,6 +189,23 @@ public sealed class MqttSessionState
     public MqttPublishPacket WillMessage { get; set; }
 
     public bool Connected { get; set; }
+
+    public List<MqttInflightState> InflightMessages { get; }
+
+    public MqttProtocolVersion ProtocolVersion { get; set; } = MqttProtocolVersion.V500;
+}
+
+public sealed class MqttInflightState
+{
+    public ushort PacketIdentifier { get; set; }
+
+    public string Topic { get; set; }
+
+    public byte[] Payload { get; set; }
+
+    public MqttQualityOfService QualityOfService { get; set; }
+
+    public bool Retain { get; set; }
 }
 
 public sealed class MqttBroker
@@ -143,6 +215,7 @@ public sealed class MqttBroker
     private readonly ConcurrentDictionary<string, ClientConnectionState> _connections = new ConcurrentDictionary<string, ClientConnectionState>(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, MqttPublishPacket> _retainedMessages = new ConcurrentDictionary<string, MqttPublishPacket>(StringComparer.Ordinal);
     private readonly List<BrokerListenerRuntime> _listeners = new List<BrokerListenerRuntime>();
+    private readonly IReadOnlyList<IMqttBrokerPlugin> _plugins;
     private readonly object _gate = new object();
     private CancellationTokenSource _listenerCancellationTokenSource;
     private Task _listenerTask;
@@ -152,7 +225,9 @@ public sealed class MqttBroker
     {
         Options = options ?? new MqttBrokerOptions();
         _sessionStore = Options.SessionStoreFactory == null ? new InMemoryMqttSessionStore() : Options.SessionStoreFactory(new InMemoryMqttSessionStore());
+        _plugins = Options.Plugins;
         _logger = logger ?? NullLogger.Instance;
+        LoadRetainedMessages();
     }
 
     public MqttBrokerOptions Options { get; }
@@ -309,7 +384,9 @@ public sealed class MqttBroker
                     break;
                 }
 
-                var packet = codec.Decode(payload.Value.Span);
+                var packet = state == null
+                    ? codec.Decode(payload.Value.Span)
+                    : codec.Decode(payload.Value.Span, state.Session.ProtocolVersion);
                 switch (packet)
                 {
                     case MqttConnectPacket connect:
@@ -321,8 +398,11 @@ public sealed class MqttBroker
                     case MqttPublishPacket publish:
                         await HandlePublishAsync(state, connection, codec, publish, cancellationToken).ConfigureAwait(false);
                         break;
+                    case MqttPubRelPacket pubRel:
+                        await HandlePubRelAsync(state, connection, codec, pubRel, cancellationToken).ConfigureAwait(false);
+                        break;
                     case MqttPingReqPacket _:
-                        await connection.SendAsync(codec.Encode(new MqttPingRespPacket()), cancellationToken).ConfigureAwait(false);
+                        await connection.SendAsync(codec.Encode(new MqttPingRespPacket(), state?.Session.ProtocolVersion ?? MqttProtocolVersion.V500), cancellationToken).ConfigureAwait(false);
                         break;
                     case MqttDisconnectPacket _:
                         gracefulDisconnect = true;
@@ -352,18 +432,20 @@ public sealed class MqttBroker
         var session = connect.CleanStart || existing == null ? new MqttSessionState(clientId) : existing;
         session.Connected = true;
         session.WillMessage = connect.WillMessage;
+        session.ProtocolVersion = connect.ProtocolVersion;
         _sessionStore.Save(session);
 
         var state = new ClientConnectionState(clientId, connection, session);
         _connections[clientId] = state;
-        await connection.SendAsync(codec.Encode(new MqttConnAckPacket(0, !connect.CleanStart && existing != null)), cancellationToken).ConfigureAwait(false);
+        await connection.SendAsync(codec.Encode(new MqttConnAckPacket(0, !connect.CleanStart && existing != null), session.ProtocolVersion), cancellationToken).ConfigureAwait(false);
+        await InvokeConnectedPluginsAsync(session, connect, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("MQTT broker accepted client {ClientId}.", clientId);
 
         foreach (var retained in SnapshotRetainedMessages())
         {
             if (SessionMatches(session, retained.Topic))
             {
-                await state.Connection.SendAsync(codec.Encode(retained), cancellationToken).ConfigureAwait(false);
+                await state.Connection.SendAsync(codec.Encode(retained, state.Session.ProtocolVersion), cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -387,14 +469,15 @@ public sealed class MqttBroker
         }
 
         _sessionStore.Save(state.Session);
-        await connection.SendAsync(codec.Encode(new MqttSubAckPacket(subscribe.PacketIdentifier, subscribe.Subscriptions.Select(x => (byte)x.QualityOfService).ToArray())), cancellationToken).ConfigureAwait(false);
+        await InvokeSubscribedPluginsAsync(state.Session, subscribe, cancellationToken).ConfigureAwait(false);
+        await connection.SendAsync(codec.Encode(new MqttSubAckPacket(subscribe.PacketIdentifier, subscribe.Subscriptions.Select(x => (byte)x.QualityOfService).ToArray()), state.Session.ProtocolVersion), cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("MQTT broker updated subscriptions for {ClientId}.", state.ClientId);
 
         foreach (var retained in SnapshotRetainedMessages())
         {
             if (subscribe.Subscriptions.Any(x => MqttTopicFilterMatcher.IsMatch(x.TopicFilter, retained.Topic)))
             {
-                await state.Connection.SendAsync(codec.Encode(retained), cancellationToken).ConfigureAwait(false);
+                await state.Connection.SendAsync(codec.Encode(retained, state.Session.ProtocolVersion), cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -402,43 +485,35 @@ public sealed class MqttBroker
     private async Task HandlePublishAsync(ClientConnectionState state, IMqttConnection connection, MqttPacketCodec codec, MqttPublishPacket publish, CancellationToken cancellationToken)
     {
         EnsureConnected(state);
-        if (publish.Retain)
+        if (publish.QualityOfService == MqttQualityOfService.ExactlyOnce)
         {
-            if (publish.Payload.IsEmpty)
-            {
-                _retainedMessages.TryRemove(publish.Topic, out _);
-            }
-            else
-            {
-                _retainedMessages[publish.Topic] = publish;
-            }
+            SaveInflightPublish(state.Session, publish);
+            _sessionStore.Save(state.Session);
+            await connection.SendAsync(codec.Encode(new MqttPubRecPacket(publish.PacketIdentifier), state.Session.ProtocolVersion), cancellationToken).ConfigureAwait(false);
+            return;
         }
 
-        foreach (var subscriber in _connections.Values)
+        await RoutePublishAsync(connection, codec, state.Session, publish, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandlePubRelAsync(ClientConnectionState state, IMqttConnection connection, MqttPacketCodec codec, MqttPubRelPacket pubRel, CancellationToken cancellationToken)
+    {
+        EnsureConnected(state);
+        var inflight = state.Session.InflightMessages.FirstOrDefault(x => x.PacketIdentifier == pubRel.PacketIdentifier);
+        if (inflight != null)
         {
-            if (!subscriber.Session.Connected || !SessionMatches(subscriber.Session, publish.Topic))
-            {
-                continue;
-            }
-
-            var deliveryQos = GetDeliveryQualityOfService(subscriber.Session, publish);
-            var deliveryPacket = new MqttPublishPacket(
-                publish.Topic,
-                publish.Payload,
-                deliveryQos,
-                deliveryQos == MqttQualityOfService.AtLeastOnce ? publish.PacketIdentifier : (ushort)0,
-                publish.Retain,
-                publish.Duplicate);
-
-            await subscriber.Connection.SendAsync(codec.Encode(deliveryPacket), cancellationToken).ConfigureAwait(false);
+            var publish = new MqttPublishPacket(
+                inflight.Topic,
+                inflight.Payload ?? Array.Empty<byte>(),
+                inflight.QualityOfService,
+                inflight.PacketIdentifier,
+                inflight.Retain);
+            await RoutePublishAsync(connection, codec, state.Session, publish, cancellationToken, acknowledge: false).ConfigureAwait(false);
+            state.Session.InflightMessages.Remove(inflight);
+            _sessionStore.Save(state.Session);
         }
 
-        if (publish.QualityOfService == MqttQualityOfService.AtLeastOnce)
-        {
-            await connection.SendAsync(codec.Encode(new MqttPubAckPacket(publish.PacketIdentifier)), cancellationToken).ConfigureAwait(false);
-        }
-
-        _logger.LogInformation("MQTT broker routed publish {Topic}.", publish.Topic);
+        await connection.SendAsync(codec.Encode(new MqttPubCompPacket(pubRel.PacketIdentifier), state.Session.ProtocolVersion), cancellationToken).ConfigureAwait(false);
     }
 
     private Task HandleDisconnectAsync(ClientConnectionState state)
@@ -474,25 +549,14 @@ public sealed class MqttBroker
             await PublishInternalAsync(will, cancellationToken).ConfigureAwait(false);
             _logger.LogInformation("MQTT broker published will for {ClientId}.", state.ClientId);
         }
+
+        await InvokeDisconnectedPluginsAsync(state.Session, null, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task PublishInternalAsync(MqttPublishPacket publish, CancellationToken cancellationToken)
     {
         var codec = new MqttPacketCodec();
-        if (publish.Retain)
-        {
-            _retainedMessages[publish.Topic] = publish;
-        }
-
-        foreach (var subscriber in _connections.Values)
-        {
-            if (!subscriber.Session.Connected || !SessionMatches(subscriber.Session, publish.Topic))
-            {
-                continue;
-            }
-
-            await subscriber.Connection.SendAsync(codec.Encode(new MqttPublishPacket(publish.Topic, publish.Payload, GetDeliveryQualityOfService(subscriber.Session, publish), retain: publish.Retain)), cancellationToken).ConfigureAwait(false);
-        }
+        await RoutePublishAsync(null, codec, null, publish, cancellationToken, acknowledge: false).ConfigureAwait(false);
     }
 
     private static bool SessionMatches(MqttSessionState session, string topic)
@@ -502,6 +566,81 @@ public sealed class MqttBroker
     {
         var requested = session.Subscriptions.Where(x => MqttTopicFilterMatcher.IsMatch(x.TopicFilter, publish.Topic)).Select(x => x.QualityOfService).DefaultIfEmpty(MqttQualityOfService.AtMostOnce).Max();
         return requested < publish.QualityOfService ? requested : publish.QualityOfService;
+    }
+
+    private async Task RoutePublishAsync(IMqttConnection sourceConnection, MqttPacketCodec codec, MqttSessionState session, MqttPublishPacket publish, CancellationToken cancellationToken, bool acknowledge = true)
+    {
+        await InvokePublishingPluginsAsync(session, publish, cancellationToken).ConfigureAwait(false);
+        PersistRetainedMessage(publish);
+
+        foreach (var subscriber in _connections.Values)
+        {
+            if (!subscriber.Session.Connected || !SessionMatches(subscriber.Session, publish.Topic))
+            {
+                continue;
+            }
+
+            var deliveryQos = GetDeliveryQualityOfService(subscriber.Session, publish);
+            var deliveryPacket = new MqttPublishPacket(
+                publish.Topic,
+                publish.Payload,
+                deliveryQos,
+                deliveryQos == MqttQualityOfService.AtMostOnce ? (ushort)0 : publish.PacketIdentifier,
+                publish.Retain,
+                publish.Duplicate);
+
+            await subscriber.Connection.SendAsync(codec.Encode(deliveryPacket, subscriber.Session.ProtocolVersion), cancellationToken).ConfigureAwait(false);
+        }
+
+        if (acknowledge && sourceConnection != null)
+        {
+            if (publish.QualityOfService == MqttQualityOfService.AtLeastOnce)
+            {
+                await sourceConnection.SendAsync(codec.Encode(new MqttPubAckPacket(publish.PacketIdentifier), session?.ProtocolVersion ?? MqttProtocolVersion.V500), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        _logger.LogInformation("MQTT broker routed publish {Topic}.", publish.Topic);
+    }
+
+    private void PersistRetainedMessage(MqttPublishPacket publish)
+    {
+        if (!publish.Retain)
+        {
+            return;
+        }
+
+        if (publish.Payload.IsEmpty)
+        {
+            _retainedMessages.TryRemove(publish.Topic, out _);
+            _sessionStore.RemoveRetainedMessage(publish.Topic);
+            return;
+        }
+
+        _retainedMessages[publish.Topic] = publish;
+        _sessionStore.SaveRetainedMessage(publish);
+    }
+
+    private static void SaveInflightPublish(MqttSessionState session, MqttPublishPacket publish)
+    {
+        var existing = session.InflightMessages.FirstOrDefault(x => x.PacketIdentifier == publish.PacketIdentifier);
+        if (existing == null)
+        {
+            session.InflightMessages.Add(new MqttInflightState
+            {
+                PacketIdentifier = publish.PacketIdentifier,
+                Topic = publish.Topic,
+                Payload = publish.Payload.ToArray(),
+                QualityOfService = publish.QualityOfService,
+                Retain = publish.Retain,
+            });
+            return;
+        }
+
+        existing.Topic = publish.Topic;
+        existing.Payload = publish.Payload.ToArray();
+        existing.QualityOfService = publish.QualityOfService;
+        existing.Retain = publish.Retain;
     }
 
     private static void EnsureConnected(ClientConnectionState state)
@@ -515,13 +654,82 @@ public sealed class MqttBroker
     private List<MqttPublishPacket> SnapshotRetainedMessages()
         => _retainedMessages.Values.ToList();
 
-    private static BrokerListenerRuntime CreateListenerRuntime(MqttListenerRegistration registration)
+    private void LoadRetainedMessages()
+    {
+        foreach (var message in _sessionStore.GetRetainedMessages())
+        {
+            if (message == null || string.IsNullOrWhiteSpace(message.Topic))
+            {
+                continue;
+            }
+
+            _retainedMessages[message.Topic] = message;
+        }
+    }
+
+    private async Task InvokeConnectedPluginsAsync(MqttSessionState session, MqttConnectPacket connectPacket, CancellationToken cancellationToken)
+    {
+        if (_plugins.Count == 0)
+        {
+            return;
+        }
+
+        var context = new MqttBrokerConnectionContext(session, _sessionStore, connectPacket);
+        foreach (var plugin in _plugins)
+        {
+            await plugin.OnClientConnectedAsync(context, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task InvokeDisconnectedPluginsAsync(MqttSessionState session, MqttConnectPacket connectPacket, CancellationToken cancellationToken)
+    {
+        if (_plugins.Count == 0 || session == null)
+        {
+            return;
+        }
+
+        var context = new MqttBrokerConnectionContext(session, _sessionStore, connectPacket);
+        foreach (var plugin in _plugins)
+        {
+            await plugin.OnClientDisconnectedAsync(context, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task InvokeSubscribedPluginsAsync(MqttSessionState session, MqttSubscribePacket subscribePacket, CancellationToken cancellationToken)
+    {
+        if (_plugins.Count == 0)
+        {
+            return;
+        }
+
+        var context = new MqttBrokerSubscriptionContext(session, _sessionStore, subscribePacket);
+        foreach (var plugin in _plugins)
+        {
+            await plugin.OnSubscribedAsync(context, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task InvokePublishingPluginsAsync(MqttSessionState session, MqttPublishPacket publishPacket, CancellationToken cancellationToken)
+    {
+        if (_plugins.Count == 0)
+        {
+            return;
+        }
+
+        var context = new MqttBrokerPublishContext(session, _sessionStore, publishPacket);
+        foreach (var plugin in _plugins)
+        {
+            await plugin.OnPublishingAsync(context, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private BrokerListenerRuntime CreateListenerRuntime(MqttListenerRegistration registration)
     {
         var listener = new TcpTransportListener(new IPEndPoint(IPAddress.Any, registration.Port));
         return new BrokerListenerRuntime(registration, listener, CreateConnectionAdapter(registration));
     }
 
-    private static Func<ITransportConnection, CancellationToken, Task<IMqttConnection>> CreateConnectionAdapter(MqttListenerRegistration registration)
+    private Func<ITransportConnection, CancellationToken, Task<IMqttConnection>> CreateConnectionAdapter(MqttListenerRegistration registration)
     {
         switch (registration.Scheme)
         {
@@ -530,8 +738,9 @@ public sealed class MqttBroker
             case MqttTransportScheme.WebSocket:
                 return (connection, cancellationToken) => CreateWebSocketConnectionAsync(connection, registration.Path, cancellationToken);
             case MqttTransportScheme.Tls:
+                return (connection, cancellationToken) => CreateTlsPipeConnectionAsync(connection, cancellationToken);
             case MqttTransportScheme.WebSocketSecure:
-                return (_, __) => Task.FromException<IMqttConnection>(new NotSupportedException("TLS/WSS listener startup is deferred until certificate plumbing is in place."));
+                return (connection, cancellationToken) => CreateSecureWebSocketConnectionAsync(connection, registration.Path, cancellationToken);
             default:
                 return (_, __) => Task.FromException<IMqttConnection>(new NotSupportedException("Unsupported transport scheme: " + registration.Scheme));
         }
@@ -543,11 +752,41 @@ public sealed class MqttBroker
         return Task.FromResult<IMqttConnection>(new MqttPipeConnection(connection));
     }
 
+    private async Task<IMqttConnection> CreateTlsPipeConnectionAsync(ITransportConnection connection, CancellationToken cancellationToken)
+    {
+        var tlsConnection = await CreateTlsServerConnectionAsync(connection, cancellationToken).ConfigureAwait(false);
+        return new MqttPipeConnection(tlsConnection);
+    }
+
+    private async Task<IMqttConnection> CreateSecureWebSocketConnectionAsync(ITransportConnection connection, string expectedPath, CancellationToken cancellationToken)
+    {
+        var tlsConnection = await CreateTlsServerConnectionAsync(connection, cancellationToken).ConfigureAwait(false);
+        return await MqttWebSocketConnection.CreateServerAsync(tlsConnection, expectedPath, cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task<IMqttConnection> CreateWebSocketConnectionAsync(ITransportConnection connection, string expectedPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _ = expectedPath;
-        return await MqttWebSocketConnection.CreateServerAsync(connection, cancellationToken).ConfigureAwait(false);
+        await connection.StartAsync(cancellationToken).ConfigureAwait(false);
+        return await MqttWebSocketConnection.CreateServerAsync(connection, expectedPath, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<TlsTransportConnection> CreateTlsServerConnectionAsync(ITransportConnection connection, CancellationToken cancellationToken)
+    {
+        if (Options.ServerCertificateOptions == null)
+        {
+            throw new InvalidOperationException("TLS/WSS listener requires UseServerCertificate.");
+        }
+
+        var tlsOptions = Options.ServerCertificateOptions;
+        var tlsConnection = TlsTransportConnection.CreateServer(
+            connection,
+            tlsOptions.Certificate,
+            tlsOptions.ClientCertificateRequired,
+            tlsOptions.EnabledSslProtocols,
+            tlsOptions.CheckCertificateRevocation);
+        await tlsConnection.StartAsync(cancellationToken).ConfigureAwait(false);
+        return tlsConnection;
     }
 
     private sealed class ClientConnectionState

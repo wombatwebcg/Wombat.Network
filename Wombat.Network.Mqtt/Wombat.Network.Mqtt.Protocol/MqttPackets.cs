@@ -9,6 +9,9 @@ public enum MqttPacketType : byte
     ConnAck = 2,
     Publish = 3,
     PubAck = 4,
+    PubRec = 5,
+    PubRel = 6,
+    PubComp = 7,
     Subscribe = 8,
     SubAck = 9,
     PingReq = 12,
@@ -16,10 +19,17 @@ public enum MqttPacketType : byte
     Disconnect = 14,
 }
 
+public enum MqttProtocolVersion : byte
+{
+    V311 = 4,
+    V500 = 5,
+}
+
 public enum MqttQualityOfService : byte
 {
     AtMostOnce = 0,
     AtLeastOnce = 1,
+    ExactlyOnce = 2,
 }
 
 public abstract class MqttPacket
@@ -37,13 +47,14 @@ public abstract class MqttPacket
 
 public sealed class MqttConnectPacket : MqttPacket
 {
-    public MqttConnectPacket(string clientId, bool cleanStart = true, ushort keepAliveSeconds = 30, MqttPublishPacket willMessage = null)
+    public MqttConnectPacket(string clientId, bool cleanStart = true, ushort keepAliveSeconds = 30, MqttPublishPacket willMessage = null, MqttProtocolVersion protocolVersion = MqttProtocolVersion.V500)
         : base(MqttPacketType.Connect, 0)
     {
         ClientId = clientId ?? string.Empty;
         CleanStart = cleanStart;
         KeepAliveSeconds = keepAliveSeconds;
         WillMessage = willMessage;
+        ProtocolVersion = protocolVersion;
     }
 
     public string ClientId { get; }
@@ -53,6 +64,8 @@ public sealed class MqttConnectPacket : MqttPacket
     public ushort KeepAliveSeconds { get; }
 
     public MqttPublishPacket WillMessage { get; }
+
+    public MqttProtocolVersion ProtocolVersion { get; }
 }
 
 public sealed class MqttConnAckPacket : MqttPacket
@@ -104,6 +117,48 @@ public sealed class MqttPubAckPacket : MqttPacket
 {
     public MqttPubAckPacket(ushort packetIdentifier, byte reasonCode = 0)
         : base(MqttPacketType.PubAck, 0)
+    {
+        PacketIdentifier = packetIdentifier;
+        ReasonCode = reasonCode;
+    }
+
+    public ushort PacketIdentifier { get; }
+
+    public byte ReasonCode { get; }
+}
+
+public sealed class MqttPubRecPacket : MqttPacket
+{
+    public MqttPubRecPacket(ushort packetIdentifier, byte reasonCode = 0)
+        : base(MqttPacketType.PubRec, 0)
+    {
+        PacketIdentifier = packetIdentifier;
+        ReasonCode = reasonCode;
+    }
+
+    public ushort PacketIdentifier { get; }
+
+    public byte ReasonCode { get; }
+}
+
+public sealed class MqttPubRelPacket : MqttPacket
+{
+    public MqttPubRelPacket(ushort packetIdentifier, byte reasonCode = 0)
+        : base(MqttPacketType.PubRel, 0x02)
+    {
+        PacketIdentifier = packetIdentifier;
+        ReasonCode = reasonCode;
+    }
+
+    public ushort PacketIdentifier { get; }
+
+    public byte ReasonCode { get; }
+}
+
+public sealed class MqttPubCompPacket : MqttPacket
+{
+    public MqttPubCompPacket(ushort packetIdentifier, byte reasonCode = 0)
+        : base(MqttPacketType.PubComp, 0)
     {
         PacketIdentifier = packetIdentifier;
         ReasonCode = reasonCode;

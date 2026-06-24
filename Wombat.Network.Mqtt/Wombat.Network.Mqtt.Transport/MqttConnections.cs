@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Net;
+using System.Net.Security;
 using System.Threading;
 using System.Threading.Tasks;
 using Wombat.Network.Channels;
@@ -49,7 +50,7 @@ public sealed class MqttConnectionFactory : IMqttConnectionFactory
 
     private static async Task<TlsTransportConnection> CreateTlsTransportAsync(TcpTransportConnection tcpConnection, MqttEndpoint endpoint, CancellationToken cancellationToken)
     {
-        var tlsConnection = TlsTransportConnection.CreateClient(tcpConnection, endpoint.Host);
+        var tlsConnection = TlsTransportConnection.CreateClient(tcpConnection, endpoint.Host, endpoint.ServerCertificateValidationCallback);
         await tlsConnection.StartAsync(cancellationToken).ConfigureAwait(false);
         return tlsConnection;
     }
@@ -121,15 +122,14 @@ public sealed class MqttWebSocketConnection : IMqttConnection
 
     public static async Task<MqttWebSocketConnection> CreateClientAsync(ITransportConnection connection, string host, string path = "/mqtt", CancellationToken cancellationToken = default)
     {
-        await connection.StartAsync(cancellationToken).ConfigureAwait(false);
         await WebSocketHandshakeMiddleware.AcceptClientAsync(connection, host, path, cancellationToken).ConfigureAwait(false);
         return new MqttWebSocketConnection(connection, true);
     }
 
-    public static async Task<MqttWebSocketConnection> CreateServerAsync(ITransportConnection connection, CancellationToken cancellationToken = default)
+    public static async Task<MqttWebSocketConnection> CreateServerAsync(ITransportConnection connection, string expectedPath = "/mqtt", CancellationToken cancellationToken = default)
     {
-        await connection.StartAsync(cancellationToken).ConfigureAwait(false);
-        await WebSocketHandshakeMiddleware.AcceptServerAsync(connection, cancellationToken).ConfigureAwait(false);
+        var request = await WebSocketHandshakeMiddleware.AcceptServerAsync(connection, cancellationToken).ConfigureAwait(false);
+        ValidateRequestPath(request.RequestTarget, expectedPath);
         return new MqttWebSocketConnection(connection, false);
     }
 
@@ -166,4 +166,28 @@ public sealed class MqttWebSocketConnection : IMqttConnection
 
     public Task CloseAsync(CancellationToken cancellationToken = default)
         => _connection.CloseAsync(cancellationToken);
+
+    private static void ValidateRequestPath(string requestTarget, string expectedPath)
+    {
+        var actualPath = NormalizePath(ExtractPath(requestTarget));
+        var normalizedExpectedPath = NormalizePath(expectedPath);
+        if (!string.Equals(actualPath, normalizedExpectedPath, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Unexpected WebSocket request path: " + requestTarget);
+        }
+    }
+
+    private static string ExtractPath(string requestTarget)
+    {
+        if (string.IsNullOrWhiteSpace(requestTarget))
+        {
+            return "/";
+        }
+
+        var queryIndex = requestTarget.IndexOf('?');
+        return queryIndex >= 0 ? requestTarget.Substring(0, queryIndex) : requestTarget;
+    }
+
+    private static string NormalizePath(string path)
+        => string.IsNullOrWhiteSpace(path) ? "/" : path.StartsWith("/", StringComparison.Ordinal) ? path : "/" + path;
 }

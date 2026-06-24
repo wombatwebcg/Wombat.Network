@@ -48,6 +48,58 @@ public class MqttClientFlowTests
     }
 
     [Fact]
+    public async Task Client_ShouldPublishQoS2_WithPubRecPubRelPubCompFlow()
+    {
+        var script = new ScriptedMqttConnection(
+            new MqttConnAckPacket(),
+            new MqttPubRecPacket(1),
+            new MqttPubCompPacket(1));
+        var clientFactory = new DelegateMqttConnectionFactory(_ => Task.FromResult<IMqttConnection>(script));
+        var client = new MqttClient(new MqttClientOptions
+        {
+            Endpoint = new MqttEndpoint("localhost", 1883),
+            ClientId = "client-qos2",
+        }, clientFactory);
+
+        await client.ConnectAsync();
+        await client.PublishAsync("topic/2", new byte[] { 7, 8, 9 }, MqttQualityOfService.ExactlyOnce);
+
+        script.SentPackets.Should().ContainInOrder(
+            typeof(MqttConnectPacket),
+            typeof(MqttPublishPacket),
+            typeof(MqttPubRelPacket));
+    }
+
+    [Fact]
+    public async Task Client_ShouldUseV311Flow_WhenConfigured()
+    {
+        var script = new ScriptedMqttConnection(
+            MqttProtocolVersion.V311,
+            new MqttConnAckPacket(),
+            new MqttSubAckPacket(1, new byte[] { 1 }),
+            new MqttPubAckPacket(2));
+        var clientFactory = new DelegateMqttConnectionFactory(_ => Task.FromResult<IMqttConnection>(script));
+        var client = new MqttClient(new MqttClientOptions
+        {
+            Endpoint = new MqttEndpoint("localhost", 1883),
+            ClientId = "client-v311",
+            ProtocolVersion = MqttProtocolVersion.V311,
+        }, clientFactory);
+
+        await client.ConnectAsync();
+        await client.SubscribeAsync("topic/311", MqttQualityOfService.AtLeastOnce);
+        await client.PublishAsync("topic/311", new byte[] { 1, 2, 3 }, MqttQualityOfService.AtLeastOnce);
+        await client.DisconnectAsync();
+
+        script.ConnectProtocols.Should().ContainSingle().Which.Should().Be(MqttProtocolVersion.V311);
+        script.SentPackets.Should().ContainInOrder(
+            typeof(MqttConnectPacket),
+            typeof(MqttSubscribePacket),
+            typeof(MqttPublishPacket),
+            typeof(MqttDisconnectPacket));
+    }
+
+    [Fact]
     public async Task WebSocketConnection_ShouldHandshakeAndExchangeMqttPacket()
     {
         var pair = InMemoryTransportConnection.CreatePair();
@@ -85,22 +137,38 @@ public class MqttClientFlowTests
     {
         private readonly MqttPacketCodec _codec = new MqttPacketCodec();
         private readonly System.Collections.Generic.Queue<ReadOnlyMemory<byte>> _responses;
+        private readonly MqttProtocolVersion _protocolVersion;
 
         public ScriptedMqttConnection(params MqttPacket[] responses)
+            : this(MqttProtocolVersion.V500, responses)
         {
+        }
+
+        public ScriptedMqttConnection(MqttProtocolVersion protocolVersion, params MqttPacket[] responses)
+        {
+            _protocolVersion = protocolVersion;
             _responses = new System.Collections.Generic.Queue<ReadOnlyMemory<byte>>();
             SentPackets = new System.Collections.Generic.List<Type>();
+            ConnectProtocols = new System.Collections.Generic.List<MqttProtocolVersion>();
             foreach (var response in responses)
             {
-                _responses.Enqueue(_codec.Encode(response));
+                _responses.Enqueue(_codec.Encode(response, protocolVersion));
             }
         }
 
         public System.Collections.Generic.List<Type> SentPackets { get; }
 
+        public System.Collections.Generic.List<MqttProtocolVersion> ConnectProtocols { get; }
+
         public ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken = default)
         {
-            SentPackets.Add(_codec.Decode(packet.Span).GetType());
+            var decoded = _codec.Decode(packet.Span, _protocolVersion);
+            SentPackets.Add(decoded.GetType());
+            if (decoded is MqttConnectPacket connect)
+            {
+                ConnectProtocols.Add(connect.ProtocolVersion);
+            }
+
             return default;
         }
 

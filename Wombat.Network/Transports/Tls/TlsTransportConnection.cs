@@ -15,28 +15,32 @@ public sealed class TlsTransportConnection : ITransportConnection, IDisposable
 {
     private readonly ITransportConnection _innerConnection;
     private readonly SslStream _sslStream;
-    private readonly IDuplexPipe _transport;
     private readonly Func<SslStream, CancellationToken, Task> _authenticateAsync;
+    private readonly PipeOptions _pipeOptions;
+    private readonly string _transportId;
+    private IDuplexPipe _transport;
     private int _closed;
 
     private TlsTransportConnection(
         ITransportConnection innerConnection,
         SslStream sslStream,
-        IDuplexPipe transport,
         Func<SslStream, CancellationToken, Task> authenticateAsync,
+        PipeOptions pipeOptions,
+        string transportId,
         string id)
     {
         _innerConnection = innerConnection ?? throw new ArgumentNullException(nameof(innerConnection));
         _sslStream = sslStream ?? throw new ArgumentNullException(nameof(sslStream));
-        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _authenticateAsync = authenticateAsync ?? throw new ArgumentNullException(nameof(authenticateAsync));
+        _pipeOptions = pipeOptions;
+        _transportId = transportId;
         Id = string.IsNullOrWhiteSpace(id) ? innerConnection.Id : id;
     }
 
     public string Id { get; }
     public EndPoint LocalEndPoint => _innerConnection.LocalEndPoint;
     public EndPoint RemoteEndPoint => _innerConnection.RemoteEndPoint;
-    public IDuplexPipe Transport => _transport;
+    public IDuplexPipe Transport => _transport ?? throw new InvalidOperationException("TLS transport is not started.");
 
     public static TlsTransportConnection CreateClient(
         ITransportConnection innerConnection,
@@ -55,8 +59,9 @@ public sealed class TlsTransportConnection : ITransportConnection, IDisposable
         return new TlsTransportConnection(
             innerConnection,
             sslStream,
-            StreamConnection.GetDuplex(sslStream, pipeOptions, id),
             (ssl, _) => ssl.AuthenticateAsClientAsync(targetHost),
+            pipeOptions,
+            id,
             id);
     }
 
@@ -80,8 +85,9 @@ public sealed class TlsTransportConnection : ITransportConnection, IDisposable
         return new TlsTransportConnection(
             innerConnection,
             sslStream,
-            StreamConnection.GetDuplex(sslStream, pipeOptions, id),
             (ssl, _) => ssl.AuthenticateAsServerAsync(certificate, clientCertificateRequired, enabledSslProtocols, checkCertificateRevocation),
+            pipeOptions,
+            id,
             id);
     }
 
@@ -89,6 +95,7 @@ public sealed class TlsTransportConnection : ITransportConnection, IDisposable
     {
         await _innerConnection.StartAsync(cancellationToken).ConfigureAwait(false);
         await _authenticateAsync(_sslStream, cancellationToken).ConfigureAwait(false);
+        _transport = StreamConnection.GetDuplex(_sslStream, _pipeOptions, _transportId);
     }
 
     public async Task CloseAsync(CancellationToken cancellationToken = default)
@@ -99,8 +106,8 @@ public sealed class TlsTransportConnection : ITransportConnection, IDisposable
             return;
         }
 
-        try { _transport.Input.Complete(); } catch { }
-        try { _transport.Output.Complete(); } catch { }
+        try { _transport?.Input.Complete(); } catch { }
+        try { _transport?.Output.Complete(); } catch { }
         try { _sslStream.Dispose(); } catch { }
         await _innerConnection.CloseAsync(cancellationToken).ConfigureAwait(false);
     }
